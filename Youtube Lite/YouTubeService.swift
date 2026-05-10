@@ -688,14 +688,37 @@ class YouTubeService {
                     return
                 }
                 
+                // Parse raw JSON to handle cipher objects (adaptive formats)
+                let rawJSON = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let rawStreaming = rawJSON?["streamingData"] as? [String: Any]
+                let rawFormats = rawStreaming?["formats"] as? [[String: Any]] ?? []
+                let rawAdaptiveFormats = rawStreaming?["adaptiveFormats"] as? [[String: Any]] ?? []
+                let rawAllFormats = rawFormats + rawAdaptiveFormats
+                
+                func extractCipher(from rawFormat: [String: Any]) -> String? {
+                    for key in ["signatureCipher", "cipher"] {
+                        if let cipherStr = rawFormat[key] as? String {
+                            return cipherStr
+                        }
+                        if let cipherObj = rawFormat[key] as? [String: String] {
+                            var parts: [String] = []
+                            if let u = cipherObj["url"] { parts.append("url=\(u)") }
+                            if let s = cipherObj["s"] ?? cipherObj["sig"] { parts.append("s=\(s)") }
+                            if let sp = cipherObj["sp"] { parts.append("sp=\(sp)") }
+                            if !parts.isEmpty { return parts.joined(separator: "&") }
+                        }
+                    }
+                    return nil
+                }
+                
                 var allFormats = (streaming.formats ?? [])
                 allFormats += (streaming.adaptiveFormats ?? [])
                 
                 let adaptiveSet = Set(streaming.adaptiveFormats?.map(\.itag) ?? [])
                 var infos: [VideoStreamInfo] = []
                 
-                var urlCount = 0, cipherCount = 0
-                for fmt in allFormats {
+                var urlCount = 0, cipherCount = 0, objectCipherCount = 0
+                for (index, fmt) in allFormats.enumerated() {
                     var directURL: URL?
                     if let urlStr = fmt.url {
                         directURL = self?.processURL(urlStr)
@@ -703,6 +726,12 @@ class YouTubeService {
                     } else if let cipher = fmt.signatureCipher ?? fmt.cipher {
                         directURL = self?.decipherCipher(cipher)
                         cipherCount += 1
+                    } else if index < rawAllFormats.count,
+                              let fallbackCipher = extractCipher(from: rawAllFormats[index]) {
+                        print("[Fetch] itag \(fmt.itag): cipher extracted from JSON object")
+                        directURL = self?.decipherCipher(fallbackCipher)
+                        cipherCount += 1
+                        objectCipherCount += 1
                     }
                     let quality = fmt.qualityLabel ?? fmt.quality ?? "Unknown"
                     infos.append(VideoStreamInfo(
@@ -712,7 +741,7 @@ class YouTubeService {
                     ))
                 }
                 let withURL = infos.filter { $0.directURL != nil }.count
-                print("[Fetch] Total formats: \(allFormats.count), with url: \(urlCount), with cipher: \(cipherCount), produced URLs: \(withURL)")
+                print("[Fetch] Total formats: \(allFormats.count), with url: \(urlCount), with cipher: \(cipherCount) (object: \(objectCipherCount)), produced URLs: \(withURL)")
                 completion(.success(infos))
             } catch {
                 completion(.failure(error))
