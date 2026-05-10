@@ -384,26 +384,205 @@ class YouTubeService {
         let context = JSContext()
         context?.exceptionHandler = { _, exception in
             if let exc = exception {
-                print("JS Error: \(exc.toString() ?? "")")
+                print("JS Error [mock]: \(exc.toString() ?? "")")
             }
         }
+        print("[JSContext] Evaluating browser mock environment...")
         context?.evaluateScript("""
             var window = this;
-            var navigator = { userAgent: 'Mozilla/5.0' };
+            var location = {
+                hostname: 'www.youtube.com',
+                href: 'https://www.youtube.com/',
+                protocol: 'https:',
+                pathname: '/',
+                search: '',
+                hash: '',
+                origin: 'https://www.youtube.com',
+                host: 'www.youtube.com',
+                port: '',
+                toString: function(){ return this.href; },
+                assign: function(){},
+                replace: function(){},
+                reload: function(){}
+            };
+            window.location = location;
+            var navigator = {
+                userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                language: 'en-US',
+                languages: ['en-US'],
+                platform: 'MacIntel',
+                cookieEnabled: true,
+                onLine: true
+            };
             var document = {
                 querySelector: function(){ return null; },
-                createElement: function(){ return { style: {} }; },
+                createElement: function(tag){
+                    var el = {
+                        style: {}, setAttribute: function(){}, appendChild: function(){},
+                        classList: { add: function(){} }, removeAttribute: function(){},
+                        getAttribute: function(){ return null; }, addEventListener: function(){},
+                        removeEventListener: function(){}, cloneNode: function(){ return el; },
+                        contains: function(){ return false; }, getBoundingClientRect: function(){ return {top:0,left:0,right:0,bottom:0,width:0,height:0}; },
+                        querySelector: function(){ return null; }, querySelectorAll: function(){ return []; },
+                        innerHTML: '', textContent: '', tagName: (tag||'div').toUpperCase()
+                    };
+                    return el;
+                },
                 addEventListener: function(){},
                 removeEventListener: function(){},
+                dispatchEvent: function(){ return true; },
                 getElementById: function(){ return null; },
-                location: { toString: function(){ return 'https://www.youtube.com'; } }
+                getElementsByTagName: function(){ return []; },
+                getElementsByClassName: function(){ return []; },
+                querySelectorAll: function(){ return []; },
+                location: location,
+                documentElement: { style: {}, classList: { add: function(){} } },
+                body: { style: {}, appendChild: function(){}, classList: { add: function(){} }, addEventListener: function(){}, removeEventListener: function(){} },
+                head: { appendChild: function(){} },
+                cookie: '',
+                title: 'YouTube',
+                createEvent: function(type){ return { initEvent: function(){}, type: type }; },
+                createTextNode: function(text){ return { textContent: text, nodeType: 3 }; },
+                hidden: false,
+                visibilityState: 'visible',
+                readyState: 'complete'
             };
-            var setTimeout = function(){};
+            var setTimeout = function(fn, delay){ return 0; };
             var clearTimeout = function(){};
-            var console = { log: function(){}, error: function(){}, warn: function(){} };
-            var performance = { now: function(){ return Date.now(); } };
+            var setInterval = function(fn, delay){ return 0; };
+            var clearInterval = function(){};
+            var console = { log: function(){}, error: function(){}, warn: function(){}, info: function(){}, debug: function(){} };
+            var performance = { now: function(){ return Date.now(); }, timing: { navigationStart: Date.now() } };
+            var screen = { width: 1920, height: 1080, colorDepth: 24, availWidth: 1920, availHeight: 1055 };
+            var innerWidth = 1920;
+            var innerHeight = 1080;
+            var self = window;
+            var top = window;
+            var parent = window;
+            var frames = [];
+
+            // XHR
+            var XMLHttpRequest = function(){
+                this.readyState = 0;
+                this.status = 0;
+                this.statusText = '';
+                this.responseText = '';
+                this.responseXML = null;
+                this.response = null;
+                this.responseType = '';
+                this.timeout = 0;
+                this.withCredentials = false;
+                this.onreadystatechange = null;
+                this.onload = null;
+                this.onerror = null;
+                this.ontimeout = null;
+                this.upload = {};
+                this.open = function(method, url, async){ this.readyState = 1; };
+                this.send = function(data){};
+                this.setRequestHeader = function(header, value){};
+                this.abort = function(){};
+                this.getResponseHeader = function(header){ return null; };
+                this.getAllResponseHeaders = function(){ return ''; };
+                this.overrideMimeType = function(mime){};
+                this.addEventListener = function(){};
+                this.removeEventListener = function(){};
+            };
+            XMLHttpRequest.UNSENT = 0;
+            XMLHttpRequest.OPENED = 1;
+            XMLHttpRequest.HEADERS_RECEIVED = 2;
+            XMLHttpRequest.LOADING = 3;
+            XMLHttpRequest.DONE = 4;
+
+            var fetch = function(url, options){
+                return Promise.resolve({
+                    ok: true, status: 200, statusText: 'OK',
+                    headers: { get: function(){ return null; }, has: function(){ return false; }, forEach: function(){} },
+                    json: function(){ return Promise.resolve({}); },
+                    text: function(){ return Promise.resolve(''); },
+                    blob: function(){ return Promise.resolve(new Blob()); },
+                    arrayBuffer: function(){ return Promise.resolve(new ArrayBuffer(0)); },
+                    clone: function(){ return this; },
+                    body: null, bodyUsed: false, redirected: false, type: 'basic', url: ''
+                });
+            };
+            var Headers = function(){};
+            var Request = function(url, options){};
+            var Response = function(body, options){ this.body = body; };
+            Response.prototype.json = function(){ return Promise.resolve({}); };
+            Response.prototype.text = function(){ return Promise.resolve(''); };
+
+            var btoa = function(str){ return str; };
+            var atob = function(str){ return str; };
+
+            var localStorage = { getItem: function(){ return null; }, setItem: function(){}, removeItem: function(){}, clear: function(){}, key: function(){ return null; }, length: 0 };
+            var sessionStorage = { getItem: function(){ return null; }, setItem: function(){}, removeItem: function(){}, clear: function(){}, key: function(){ return null; }, length: 0 };
+
+            var addEventListener = function(){};
+            var removeEventListener = function(){};
+            var dispatchEvent = function(){ return true; };
+
+            var Event = function(type, opts){ this.type = type; this.bubbles = (opts||{}).bubbles||false; this.cancelable = (opts||{}).cancelable||false; };
+            Event.prototype.preventDefault = function(){};
+            Event.prototype.stopPropagation = function(){};
+            Event.prototype.stopImmediatePropagation = function(){};
+            var CustomEvent = function(type, opts){ Event.call(this, type, opts); this.detail = (opts||{}).detail; };
+            CustomEvent.prototype = Object.create(Event.prototype);
+
+            var Image = function(){};
+            var Blob = function(parts, opts){ this.size = 0; this.type = (opts||{}).type||''; };
+            var File = function(parts, name, opts){ Blob.call(this, parts, opts); this.name = name; this.lastModified = Date.now(); };
+            var FileReader = function(){};
+            FileReader.prototype.readAsDataURL = function(){};
+            FileReader.prototype.readAsText = function(){};
+            FileReader.prototype.readAsArrayBuffer = function(){};
+            FileReader.prototype.abort = function(){};
+            var FileList = function(){};
+            var FormData = function(){ this.append = function(){}; };
+
+            var URLSearchParams = function(){};
+            URLSearchParams.prototype.append = function(){};
+            URLSearchParams.prototype.delete = function(){};
+            URLSearchParams.prototype.get = function(){ return null; };
+            URLSearchParams.prototype.getAll = function(){ return []; };
+            URLSearchParams.prototype.has = function(){ return false; };
+            URLSearchParams.prototype.set = function(){};
+            URLSearchParams.prototype.toString = function(){ return ''; };
+
+            var WebSocket = function(){};
+            WebSocket.prototype.send = function(){};
+            WebSocket.prototype.close = function(){};
+            WebSocket.CONNECTING = 0;
+            WebSocket.OPEN = 1;
+            WebSocket.CLOSING = 2;
+            WebSocket.CLOSED = 3;
+
+            var Worker = function(url){};
+            Worker.prototype.postMessage = function(){};
+            Worker.prototype.terminate = function(){};
+
+            var MutationObserver = function(callback){ this.observe = function(){}, this.disconnect = function(){}, this.takeRecords = function(){ return []; }; };
+            var IntersectionObserver = function(callback, opts){ this.observe = function(){}, this.unobserve = function(){}, this.disconnect = function(){}, this.takeRecords = function(){ return []; }; };
+            var ResizeObserver = function(callback){ this.observe = function(){}, this.unobserve = function(){}, this.disconnect = function(){}; };
+
+            var requestAnimationFrame = function(cb){ return setTimeout(cb, 16); };
+            var cancelAnimationFrame = function(id){ clearTimeout(id); };
+
+            var matchMedia = function(query){ return { matches: false, media: query, onchange: null, addListener: function(){}, removeListener: function(){}, addEventListener: function(){}, removeEventListener: function(){} }; };
+            var getComputedStyle = function(el, pseudo){ return el.style||{}; };
+
+            var crypto = { getRandomValues: function(buf){ for(var i=0;i<buf.length;i++) buf[i]=Math.floor(Math.random()*256); return buf; }, randomUUID: function(){ return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return (c=='x'?r:r&0x3|0x8).toString(16);}); }, subtle: {} };
+
+            // Common YouTube feature detection stubs
+            var _yt_player = {};
         """)
+        print("[JSContext] Mock evaluation complete. Now evaluating player JS...")
+        context?.exceptionHandler = { _, exception in
+            if let exc = exception {
+                print("JS Error [player]: \(exc.toString() ?? "")")
+            }
+        }
         context?.evaluateScript(js)
+        print("[JSContext] Player JS evaluation complete.")
         if context?.exception != nil {
             print("JS evaluation error, but decipher functions may still be accessible")
             context?.exception = nil
