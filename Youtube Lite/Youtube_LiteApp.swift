@@ -12,7 +12,6 @@ import SwiftData
 struct Youtube_LiteApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -25,8 +24,8 @@ struct Youtube_LiteApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-        }
+                    VideoServiceView()
+                }
         .modelContainer(sharedModelContainer)
     }
 }
