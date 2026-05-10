@@ -27,6 +27,7 @@ struct VideoServiceView: View {
                 streamList
             }
             .navigationTitle("YouTube Link Extractor")
+            .onAppear { fetchLinks() }
         }
     }
     

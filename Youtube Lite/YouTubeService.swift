@@ -19,6 +19,7 @@ struct VideoFormat: Codable {
     let itag: Int
     let url: String?
     let signatureCipher: String?
+    let cipher: String?
     let mimeType: String?
     let bitrate: Int32?
     let width: Int?
@@ -355,28 +356,52 @@ class YouTubeService {
             if let ts = ts {
                 UserDefaults.standard.set(ts, forKey: CacheKeys.signatureTimestamp)
             }
+            print("[Config] signatureTimestamp: \(ts ?? -1)")
+        } else {
+            print("[Config] signatureTimestamp: NOT FOUND")
         }
         
         // signature decipher function name
-        if let range = js.range(of: #"\.set\("signature",\s*([A-Za-z0-9_$]+)\( "#, options: .regularExpression) {
-            let line = String(js[range])
-            let regex = try? NSRegularExpression(pattern: #"\.set\("signature",\s*([A-Za-z0-9_$]+)\( "#)
-            if let nsMatch = regex?.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
-               nsMatch.numberOfRanges > 1,
-               let swiftRange = Range(nsMatch.range(at: 1), in: line) {
-                self.decipherFuncName = String(line[swiftRange])
+        let decipherPatterns: [(String, String)] = [
+            (#"\.set\(["']signature["'],\s*([A-Za-z0-9_$]+)(?:\.call|\.apply)?\("#, "direct-call"),
+            (#"(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*function\s*\(\s*a\s*\)\s*\{\s*a\s*=\s*a\s*\.split\s*\(\s*""\s*\)"#, "split-body"),
+        ]
+        for (pattern, desc) in decipherPatterns {
+            if let range = js.range(of: pattern, options: .regularExpression) {
+                let line = String(js[range])
+                let regex = try? NSRegularExpression(pattern: pattern)
+                if let match = regex?.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
+                   match.numberOfRanges > 1,
+                   let swiftRange = Range(match.range(at: 1), in: line) {
+                    self.decipherFuncName = String(line[swiftRange])
+                    print("[Config] decipherFuncName (\(desc)): \(self.decipherFuncName!)")
+                    break
+                }
             }
+        }
+        if self.decipherFuncName == nil {
+            print("[Config] decipherFuncName: NOT FOUND after multiple patterns")
         }
         
         // n transform function name
-        if let range = js.range(of: #"\.set\("n",\s*([A-Za-z0-9_$]+)\( "#, options: .regularExpression) {
-            let line = String(js[range])
-            let regex = try? NSRegularExpression(pattern: #"\.set\("n",\s*([A-Za-z0-9_$]+)\( "#)
-            if let nsMatch = regex?.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
-               nsMatch.numberOfRanges > 1,
-               let swiftRange = Range(nsMatch.range(at: 1), in: line) {
-                self.nTransFuncName = String(line[swiftRange])
+        let nTransformPatterns: [(String, String)] = [
+            (#"\.set\(["']n["'],\s*([A-Za-z0-9_$]+)(?:\.call|\.apply)?\("#, "direct-call"),
+        ]
+        for (pattern, desc) in nTransformPatterns {
+            if let range = js.range(of: pattern, options: .regularExpression) {
+                let line = String(js[range])
+                let regex = try? NSRegularExpression(pattern: pattern)
+                if let match = regex?.firstMatch(in: line, range: NSRange(line.startIndex..<line.endIndex, in: line)),
+                   match.numberOfRanges > 1,
+                   let swiftRange = Range(match.range(at: 1), in: line) {
+                    self.nTransFuncName = String(line[swiftRange])
+                    print("[Config] nTransFuncName (\(desc)): \(self.nTransFuncName!)")
+                    break
+                }
             }
+        }
+        if self.nTransFuncName == nil {
+            print("[Config] nTransFuncName: NOT FOUND after multiple patterns")
         }
     }
     
@@ -669,12 +694,15 @@ class YouTubeService {
                 let adaptiveSet = Set(streaming.adaptiveFormats?.map(\.itag) ?? [])
                 var infos: [VideoStreamInfo] = []
                 
+                var urlCount = 0, cipherCount = 0
                 for fmt in allFormats {
                     var directURL: URL?
                     if let urlStr = fmt.url {
                         directURL = self?.processURL(urlStr)
-                    } else if let cipher = fmt.signatureCipher {
+                        urlCount += 1
+                    } else if let cipher = fmt.signatureCipher ?? fmt.cipher {
                         directURL = self?.decipherCipher(cipher)
+                        cipherCount += 1
                     }
                     let quality = fmt.qualityLabel ?? fmt.quality ?? "Unknown"
                     infos.append(VideoStreamInfo(
@@ -683,6 +711,8 @@ class YouTubeService {
                         isAdaptive: adaptiveSet.contains(fmt.itag)
                     ))
                 }
+                let withURL = infos.filter { $0.directURL != nil }.count
+                print("[Fetch] Total formats: \(allFormats.count), with url: \(urlCount), with cipher: \(cipherCount), produced URLs: \(withURL)")
                 completion(.success(infos))
             } catch {
                 completion(.failure(error))
@@ -704,28 +734,54 @@ class YouTubeService {
     
     private func decipherCipher(_ cipher: String) -> URL? {
         guard let decoded = cipher.removingPercentEncoding else { return nil }
+        print("[Decipher] raw cipher (first 300 chars): \(cipher.prefix(300))")
         var urlStr: String?, sig: String?, sp: String?
         for pair in decoded.components(separatedBy: "&") {
             let kv = pair.components(separatedBy: "=")
             if kv.count == 2 {
                 switch kv[0] {
-                case "url": urlStr = kv[1]
-                case "s": sig = kv[1]
+                case "url", "u": urlStr = kv[1]
+                case "s", "sig": sig = kv[1]
                 case "sp": sp = kv[1]
+                default: break
+                }
+            } else if kv.count > 2 {
+                let key = kv[0]
+                let val = kv.dropFirst().joined(separator: "=")
+                switch key {
+                case "url", "u": urlStr = val
+                case "s", "sig": sig = val
+                case "sp": sp = val
                 default: break
                 }
             }
         }
-        guard let urlStr = urlStr, let sig = sig, let deciphered = decipherSignature(sig) else { return nil }
+        print("[Decipher] url: \(urlStr?.prefix(80) ?? "nil"), s: \(sig?.prefix(20) ?? "nil"), sp: \(sp ?? "nil")")
+        guard let urlStr = urlStr, let sig = sig, let deciphered = decipherSignature(sig) else {
+            print("[Decipher] FAILED - urlStr missing: \(urlStr == nil), sig missing: \(sig == nil), decipher returned nil: \(urlStr != nil && sig != nil)")
+            return nil
+        }
         let param = sp ?? "sig"
         let final = urlStr.contains("?") ? "\(urlStr)&\(param)=\(deciphered)" : "\(urlStr)?\(param)=\(deciphered)"
+        print("[Decipher] SUCCESS, final URL: \(final.prefix(100))...")
         return processURL(final)
     }
     
     private func decipherSignature(_ sig: String) -> String? {
-        guard let ctx = jsContext, let name = decipherFuncName else { return sig }
+        guard let ctx = jsContext, let name = decipherFuncName else {
+            print("[DecipherSig] ctx nil: \(jsContext == nil), name nil: \(decipherFuncName == nil) - returning raw sig")
+            return sig
+        }
         let escaped = sig.replacingOccurrences(of: "\"", with: "\\\"")
-        return ctx.evaluateScript("\(name)(\"\(escaped)\")")?.toString()
+        let script = "\(name)(\"\(escaped)\")"
+        let result = ctx.evaluateScript(script)
+        if let str = result?.toString() {
+            print("[DecipherSig] \(name)(...) -> \(str.prefix(30))...")
+            return str
+        } else {
+            print("[DecipherSig] \(name)(...) returned nil (function missing or threw error)")
+            return nil
+        }
     }
     
     private func transformNParam(_ n: String) -> String? {
