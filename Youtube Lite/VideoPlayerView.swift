@@ -4,18 +4,24 @@ import AVFoundation
 import CoreMedia
 
 struct VideoPlayerView: View {
-    let videoURL: URL
-    let audioURL: URL?
-    let visitorData: String?
-    let title: String
+    let videoInfo: YouTubeVideoInfo
+    @Binding var selectedStream: YouTubeStream
     
     @State private var player = AVPlayer()
 
     var body: some View {
         VideoPlayer(player: player)
             .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
-            .navigationTitle(title)
+            .navigationTitle(videoInfo.title)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    streamSelectionMenu
+                }
+            }
             .onAppear {
+                loadVideo()
+            }
+            .onChange(of: selectedStream) { _ in
                 loadVideo()
             }
             .onDisappear {
@@ -23,10 +29,39 @@ struct VideoPlayerView: View {
                 player.replaceCurrentItem(with: nil)
             }
     }
+
+    private var streamSelectionMenu: some View {
+        Menu {
+            let allStreams = videoInfo.muxedStreams + videoInfo.videoStreams + videoInfo.audioStreams
+            ForEach(allStreams) { stream in
+                Button(action: {
+                    selectedStream = stream
+                }) {
+                    HStack {
+                        if stream.id == selectedStream.id {
+                            Image(systemName: "checkmark")
+                        }
+                        Text("\(stream.quality) (\(stream.mimeType.split(separator: ";").first ?? ""))")
+                        if stream.isVideoOnly {
+                            Text("- Video only")
+                        } else if stream.isAudioOnly {
+                            Text("- Audio only")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label("Quality: \(selectedStream.quality)", systemImage: "gearshape")
+        }
+    }
     
     private func loadVideo() {
         Task {
-            let playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL, visitorData: visitorData)
+            let stream = selectedStream
+            let videoURL: URL = stream.isVideoOnly ? stream.url : (stream.isAudioOnly ? (videoInfo.bestVideoStream?.url ?? stream.url) : stream.url)
+            let audioURL: URL? = stream.isVideoOnly ? videoInfo.bestAudioStream?.url : (stream.isAudioOnly ? stream.url : nil)
+            
+            let playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL, visitorData: videoInfo.visitorData)
             await MainActor.run {
                 player.replaceCurrentItem(with: playerItem)
                 player.play()
@@ -109,9 +144,7 @@ struct VideoPlayerView: View {
 
 #Preview {
     VideoPlayerView(
-        videoURL: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")!,
-        audioURL: nil,
-        visitorData: nil,
-        title: "Preview Video"
+        videoInfo: YouTubeVideoInfo(videoId: "abc", title: "Test", duration: 100, visitorData: nil, muxedStreams: [], videoStreams: [], audioStreams: []),
+        selectedStream: .constant(YouTubeStream(itag: 18, url: URL(string: "https://example.com")!, mimeType: "video/mp4", quality: "360p", width: 640, height: 360, bitrate: 500000, audioSampleRate: nil, isAdaptive: false))
     )
 }

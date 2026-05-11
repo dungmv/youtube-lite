@@ -7,8 +7,9 @@ import AppKit
 import AVKit
 
 struct VideoServiceView: View {
-    @State private var videoID = "k8m0SaGQ_1c"
-    @State private var videoInfo: YouTubeVideoInfo?
+    @State private var searchQuery = ""
+    @State private var searchResults: [YouTubeVideo] = []
+    @State private var currentVideoInfo: YouTubeVideoInfo?
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedStream: YouTubeStream?
@@ -20,12 +21,15 @@ struct VideoServiceView: View {
             sidebar
                 .navigationTitle("YouTube Link Extractor")
         } detail: {
-            if let stream = selectedStream {
-                let videoURL: URL = stream.isVideoOnly ? stream.url : (stream.isAudioOnly ? (videoInfo?.bestVideoStream?.url ?? stream.url) : stream.url)
-                let audioURL: URL? = stream.isVideoOnly ? videoInfo?.bestAudioStream?.url : (stream.isAudioOnly ? stream.url : nil)
-                
-                VideoPlayerView(videoURL: videoURL, audioURL: audioURL, visitorData: videoInfo?.visitorData, title: stream.quality)
-                    .id(stream.id)
+            if let stream = selectedStream, let videoInfo = currentVideoInfo {
+                VideoPlayerView(
+                    videoInfo: videoInfo,
+                    selectedStream: Binding(
+                        get: { stream },
+                        set: { selectedStream = $0 }
+                    )
+                )
+                .id(videoInfo.videoId)
             } else {
                 ContentUnavailableView("No Video Selected",
                     systemImage: "play.rectangle",
@@ -33,7 +37,7 @@ struct VideoServiceView: View {
                     .navigationTitle("YouTube Lite")
             }
         }
-        .onAppear { fetchLinks() }
+        .onAppear { loadVideos() }
         .sheet(isPresented: $showLogin) {
             YouTubeLoginView()
         }
@@ -66,126 +70,120 @@ struct VideoServiceView: View {
     private var sidebar: some View {
         VStack(spacing: 0) {
             inputBar
-            if let title = videoInfo?.title {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
+            if isLoading {
+                ProgressView()
+                    .padding()
             }
             if let error = errorMessage {
                 Text(error)
                     .foregroundColor(.red)
-                    .padding(.horizontal)
-            }
-            if isLoading {
-                ProgressView("Fetching video links…")
                     .padding()
             }
-            List(selection: $selectedStream) {
-                ForEach(allStreams) { stream in
-                    streamRow(stream)
-                        .tag(stream)
-                }
+            List(searchResults) { video in
+                videoRow(video)
+                    .onTapGesture {
+                        selectVideo(video)
+                    }
             }
-            .listStyle(.plain)
+            .listStyle(.sidebar)
         }
+    }
+
+    private func videoRow(_ video: YouTubeVideo) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            AsyncImage(url: video.thumbnailUrl) { image in
+                image.resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Color.gray.opacity(0.3)
+            }
+            .frame(width: 80, height: 45)
+            .cornerRadius(4)
+            .clipped()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(video.title)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .lineLimit(2)
+                
+                if let channel = video.channelName {
+                    Text(channel)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                HStack {
+                    if let duration = video.duration {
+                        Text(duration)
+                    }
+                    if let views = video.viewCount {
+                        Text("• \(views)")
+                    }
+                }
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 
     private var inputBar: some View {
         HStack {
-            TextField("Video ID or URL", text: $videoID)
+            TextField("Search YouTube...", text: $searchQuery)
                 .textFieldStyle(.roundedBorder)
-#if os(iOS)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-#endif
-            Button("Fetch") { fetchLinks() }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
-                .disabled(isLoading)
+                .onSubmit { loadVideos() }
+            
+            Button(action: { loadVideos() }) {
+                Image(systemName: "magnifyingglass")
+            }
+            .disabled(isLoading)
         }
         .padding()
     }
 
-    /// Tổng hợp tất cả stream: muxed trước (dễ play nhất), sau đó video-only, cuối cùng audio-only
-    private var allStreams: [YouTubeStream] {
-        guard let info = videoInfo else { return [] }
-        return info.muxedStreams + info.videoStreams + info.audioStreams
-    }
 
-    private func streamRow(_ stream: YouTubeStream) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("itag \(stream.itag)").bold()
-                Text(stream.quality).foregroundColor(.secondary)
-                streamTypeBadge(stream)
-            }
-            Text(stream.mimeType).font(.caption)
-            Text(stream.url.absoluteString)
-                .font(.caption2)
-                .lineLimit(2)
-                .contextMenu {
-                    Button("Copy URL") {
-#if os(iOS)
-                        UIPasteboard.general.string = stream.url.absoluteString
-#elseif os(macOS)
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(stream.url.absoluteString, forType: .string)
-#endif
-                    }
-                }
-            if let width = stream.width, let height = stream.height {
-                Text("\(width)×\(height)").font(.caption2).foregroundColor(.secondary)
-            }
-            if let bitrate = stream.bitrate {
-                Text("\(bitrate / 1000) kbps").font(.caption2).foregroundColor(.secondary)
-            }
-        }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-    }
-
-    @ViewBuilder
-    private func streamTypeBadge(_ stream: YouTubeStream) -> some View {
-        if stream.isVideoOnly {
-            Text("Video only")
-                .font(.caption2)
-                .padding(2)
-                .background(Color.blue.opacity(0.15))
-                .cornerRadius(4)
-        } else if stream.isAudioOnly {
-            Text("Audio only")
-                .font(.caption2)
-                .padding(2)
-                .background(Color.green.opacity(0.15))
-                .cornerRadius(4)
-        } else {
-            Text("Muxed")
-                .font(.caption2)
-                .padding(2)
-                .background(Color.yellow.opacity(0.3))
-                .cornerRadius(4)
-        }
-    }
-
-    private func fetchLinks() {
-        let trimmed = videoID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        videoID = trimmed
+    private func loadVideos() {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         isLoading = true
         errorMessage = nil
-        videoInfo = nil
 
         Task {
             do {
                 let extractor = YouTubeStreamExtractor(cookies: authManager.cookies)
-                let info = try await extractor.extract(videoIDOrURL: trimmed)
+                let results: [YouTubeVideo]
+                if query.isEmpty {
+                    results = try await extractor.recommendations()
+                } else {
+                    results = try await extractor.search(query: query)
+                }
+                
                 await MainActor.run {
-                    self.videoInfo = info
+                    self.searchResults = results
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    private func selectVideo(_ video: YouTubeVideo) {
+        isLoading = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                let extractor = YouTubeStreamExtractor(cookies: authManager.cookies)
+                let info = try await extractor.extract(videoIDOrURL: video.id)
+                await MainActor.run {
+                    self.currentVideoInfo = info
+                    // Mặc định chọn stream muxed tốt nhất hoặc video tốt nhất
+                    self.selectedStream = info.bestMuxedStream ?? info.bestVideoStream
                     self.isLoading = false
                 }
             } catch {

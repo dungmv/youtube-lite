@@ -56,6 +56,15 @@ public struct YouTubeVideoInfo {
     }
 }
 
+public struct YouTubeVideo: Identifiable, Hashable {
+    public let id: String
+    public let title: String
+    public let thumbnailUrl: URL?
+    public let channelName: String?
+    public let duration: String?
+    public let viewCount: String?
+}
+
 public enum YouTubeExtractorError: Error, LocalizedError {
     case invalidVideoID
     case networkError(Error)
@@ -100,6 +109,216 @@ public final class YouTubeStreamExtractor {
         let videoID = try extractVideoID(from: videoIDOrURL)
         let playerResponse = try await fetchPlayerResponse(videoID: videoID)
         return try parsePlayerResponse(playerResponse, videoID: videoID)
+    }
+
+    /// Tìm kiếm video trên YouTube
+    public func search(query: String) async throws -> [YouTubeVideo] {
+        let urlString = "https://www.youtube.com/youtubei/v1/search?key=\(Self.innertubeAPIKey)"
+        guard let url = URL(string: urlString) else {
+            throw YouTubeExtractorError.parseError("URL API search không hợp lệ")
+        }
+
+        let body: [String: Any] = [
+            "query": query,
+            "context": [
+                "client": [
+                    "clientName": Self.innertubeClientName,
+                    "clientVersion": Self.innertubeClientVersion,
+                    "androidSdkVersion": 30,
+                    "osName": "Android",
+                    "osVersion": "11",
+                    "hl": "en",
+                    "gl": "US",
+                ],
+            ]
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        
+        if let cookies = cookies {
+            request.setValue(cookies, forHTTPHeaderField: "Cookie")
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw YouTubeExtractorError.networkError(URLError(.badServerResponse))
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw YouTubeExtractorError.parseError("Không parse được JSON search response")
+        }
+
+        print("YouTube Search Response Keys: \(json.keys)")
+        return parseSearchResponse(json)
+    }
+
+    /// Lấy danh sách video đề xuất (Home feed)
+    public func recommendations() async throws -> [YouTubeVideo] {
+        let urlString = "https://www.youtube.com/youtubei/v1/browse?key=\(Self.innertubeAPIKey)"
+        guard let url = URL(string: urlString) else {
+            throw YouTubeExtractorError.parseError("URL API browse không hợp lệ")
+        }
+
+        let body: [String: Any] = [
+            "browseId": "FEwhat_to_watch",
+            "context": [
+                "client": [
+                    "clientName": Self.innertubeClientName,
+                    "clientVersion": Self.innertubeClientVersion,
+                    "androidSdkVersion": 30,
+                    "osName": "Android",
+                    "osVersion": "11",
+                    "hl": "en",
+                    "gl": "US",
+                ],
+            ]
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        
+        if let cookies = cookies {
+            request.setValue(cookies, forHTTPHeaderField: "Cookie")
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw YouTubeExtractorError.networkError(URLError(.badServerResponse))
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw YouTubeExtractorError.parseError("Không parse được JSON browse response")
+        }
+
+        print("YouTube Browse Response Keys: \(json.keys)")
+        return parseBrowseResponse(json)
+    }
+
+    private func parseSearchResponse(_ json: [String: Any]) -> [YouTubeVideo] {
+        var videos: [YouTubeVideo] = []
+        
+        // Cấu trúc search có thể nằm trong contents.sectionListRenderer hoặc onResponseReceivedCommands
+        let contents = json["contents"] as? [String: Any]
+        let sectionList = contents?["sectionListRenderer"] as? [String: Any]
+        let contentsArray = sectionList?["contents"] as? [[String: Any]]
+            ?? ((json["onResponseReceivedCommands"] as? [[String: Any]])?.first?["appendContinuationItemsAction"] as? [String: Any])?["continuationItems"] as? [[String: Any]]
+
+        print("YouTube Search contentsArray count: \(contentsArray?.count ?? 0)")
+        guard let items = contentsArray else { 
+            print("YouTube Search: contentsArray is NIL")
+            return [] 
+        }
+
+        for item in items {
+            print("YouTube Search item keys: \(item.keys)")
+            // Trường hợp itemSectionRenderer
+            if let itemSectionRenderer = item["itemSectionRenderer"] as? [String: Any],
+               let sectionContents = itemSectionRenderer["contents"] as? [[String: Any]] {
+                print("YouTube Search itemSectionRenderer contents count: \(sectionContents.count)")
+                for content in sectionContents {
+                    print("YouTube Search content keys: \(content.keys)")
+                    if let videoRenderer = (content["videoRenderer"] as? [String: Any]) ?? (content["compactVideoRenderer"] as? [String: Any]),
+                       let video = parseVideoRenderer(videoRenderer) {
+                        videos.append(video)
+                    }
+                }
+            }
+            // Trường hợp videoRenderer trực tiếp (trong continuation)
+            else if let videoRenderer = (item["videoRenderer"] as? [String: Any]) ?? (item["compactVideoRenderer"] as? [String: Any]) {
+                if let video = parseVideoRenderer(videoRenderer) {
+                    videos.append(video)
+                }
+            }
+        }
+
+        return videos
+    }
+
+    private func parseBrowseResponse(_ json: [String: Any]) -> [YouTubeVideo] {
+        var videos: [YouTubeVideo] = []
+        
+        guard let contents = json["contents"] as? [String: Any] else {
+            print("YouTube Browse: contents is NIL")
+            return []
+        }
+        
+        guard let twoColumnBrowseResultsRenderer = contents["twoColumnBrowseResultsRenderer"] as? [String: Any] else {
+            print("YouTube Browse: twoColumnBrowseResultsRenderer is NIL")
+            // Thử cấu trúc khác cho Android
+            if let sectionList = contents["sectionListRenderer"] as? [String: Any],
+               let items = sectionList["contents"] as? [[String: Any]] {
+                print("YouTube Browse: fallback to sectionListRenderer")
+                return parseSearchResponse(json) // sectionList cấu trúc giống search
+            }
+            return []
+        }
+        
+        guard let tabs = twoColumnBrowseResultsRenderer["tabs"] as? [[String: Any]],
+              let tabRenderer = tabs.first?["tabRenderer"] as? [String: Any],
+              let tabContent = tabRenderer["content"] as? [String: Any],
+              let richGridRenderer = tabContent["richGridRenderer"] as? [String: Any],
+              let contentsArray = richGridRenderer["contents"] as? [[String: Any]] else {
+            print("YouTube Browse: Failed to parse tabs or richGridRenderer")
+            return []
+        }
+
+        print("YouTube Browse contentsArray count: \(contentsArray.count)")
+
+        for item in contentsArray {
+            if let richItemRenderer = item["richItemRenderer"] as? [String: Any],
+               let content = richItemRenderer["content"] as? [String: Any],
+               let videoRenderer = content["videoRenderer"] as? [String: Any],
+               let video = parseVideoRenderer(videoRenderer) {
+                videos.append(video)
+            }
+        }
+
+        return videos
+    }
+
+    private func parseVideoRenderer(_ renderer: [String: Any]) -> YouTubeVideo? {
+        guard let videoId = renderer["videoId"] as? String else { 
+            print("YouTube parseVideoRenderer: videoId missing in \(renderer.keys)")
+            return nil 
+        }
+        
+        let title = ((renderer["title"] as? [String: Any])?["runs"] as? [[String: Any]])
+            ?? ((renderer["headline"] as? [String: Any])?["runs"] as? [[String: Any]])
+        let titleText = title?.first?["text"] as? String ?? "Unknown Title"
+        
+        let thumbnails = (renderer["thumbnail"] as? [String: Any])?["thumbnails"] as? [[String: Any]]
+        let thumbnailUrlString = thumbnails?.last?["url"] as? String
+        let thumbnailUrl = thumbnailUrlString.flatMap { URL(string: $0) }
+        
+        let ownerText = ((renderer["longBylineText"] as? [String: Any])?["runs"] as? [[String: Any]])
+            ?? ((renderer["shortBylineText"] as? [String: Any])?["runs"] as? [[String: Any]])
+        let channelName = ownerText?.first?["text"] as? String
+        
+        let lengthText = (renderer["lengthText"] as? [String: Any])?["simpleText"] as? String
+            ?? (renderer["lengthText"] as? [String: Any])?["accessibility"]?["accessibilityData"]?["label"] as? String
+        let viewCount = (renderer["viewCountText"] as? [String: Any])?["simpleText"] as? String
+        
+        return YouTubeVideo(
+            id: videoId,
+            title: titleText,
+            thumbnailUrl: thumbnailUrl,
+            channelName: channelName,
+            duration: lengthText,
+            viewCount: viewCount
+        )
     }
 
     // MARK: - Step 1: Extract Video ID
