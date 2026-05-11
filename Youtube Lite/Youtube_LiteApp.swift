@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import SwiftData
 import AVFoundation
 
 @main
@@ -22,24 +21,9 @@ struct Youtube_LiteApp: App {
 #endif
     }
 
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            print("❌ Could not create ModelContainer: \(error)")
-            // Fallback to in-memory container to avoid crash
-            return try! ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
-        }
-    }()
-
     var body: some Scene {
         WindowGroup {
-                    VideoServiceView()
-                }
-        .modelContainer(sharedModelContainer)
+            VideoServiceView()
+        }
     }
 }

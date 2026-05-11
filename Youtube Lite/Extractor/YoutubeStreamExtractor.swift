@@ -333,35 +333,3 @@ private extension String {
         return String(self[swiftRange])
     }
 }
-
-// MARK: - Usage Example
-
-/*
- // Cách dùng trong SwiftUI / async context:
-
- let extractor = YouTubeStreamExtractor()
-
- do {
-     let info = try await extractor.extract(videoIDOrURL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-
-     print("Title:", info.title)
-     print("Duration:", info.duration ?? 0, "giây")
-
-     // Stream dễ play nhất (có cả video + audio):
-     if let best = info.bestMuxedStream {
-         print("Best muxed URL:", best.url)
-         print("Quality:", best.quality)
-         // → Dùng trực tiếp với AVPlayer
-         let player = AVPlayer(url: best.url)
-     }
-
-     // Nếu muốn chất lượng cao hơn (cần ghép audio riêng):
-     if let bestVideo = info.bestVideoStream, let bestAudio = info.bestAudioStream {
-         print("Best video:", bestVideo.url, bestVideo.quality)
-         print("Best audio:", bestAudio.url, bestAudio.bitrate ?? 0, "bps")
-     }
-
- } catch {
-     print("Lỗi:", error.localizedDescription)
- }
-*/
