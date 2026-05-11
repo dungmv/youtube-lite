@@ -3,6 +3,12 @@ import AVFoundation
 import MediaPlayer
 import Combine
 
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
 @MainActor
 class PlaybackManager: ObservableObject {
     static let shared = PlaybackManager()
@@ -12,6 +18,22 @@ class PlaybackManager: ObservableObject {
     
     private init() {
         setupRemoteCommandCenter()
+        setupBackgroundHandling()
+    }
+    
+    private func setupBackgroundHandling() {
+        #if os(iOS)
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            // Khi app vào nền, iOS có thể tự động pause player có video track.
+            // Ta cần đảm bảo player tiếp tục chạy nếu đang phát.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 100_000_000) // Đợi 0.1s để hệ thống xử lý xong việc ẩn layer
+                if let player = self?.currentPlayer, player.rate > 0 || player.timeControlStatus == .playing {
+                    player.play()
+                }
+            }
+        }
+        #endif
     }
     
     func setPlayer(_ player: AVPlayer) {
@@ -88,9 +110,7 @@ class PlaybackManager: ObservableObject {
 }
 
 #if os(iOS)
-import UIKit
 typealias PlatformImage = UIImage
 #else
-import AppKit
 typealias PlatformImage = NSImage
 #endif

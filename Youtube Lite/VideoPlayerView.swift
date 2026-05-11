@@ -8,9 +8,10 @@ struct VideoPlayerView: View {
     @Binding var selectedStream: YouTubeStream
     
     @State private var player = AVPlayer()
+    @Environment(\.scenePhase) var scenePhase
 
     var body: some View {
-        VideoPlayer(player: player)
+        PlayerView(player: player)
             .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
             .navigationTitle(videoInfo.title)
             .toolbar {
@@ -26,10 +27,13 @@ struct VideoPlayerView: View {
                 loadVideo()
             }
             .onDisappear {
-                // Trên iOS, ta có thể không muốn pause khi disappear nếu muốn chạy nền
-                // Nhưng nếu người dùng thoát khỏi màn hình video (back), ta nên pause.
-                // Nếu chỉ là app backgrounding, onDisappear thường không gọi cho root view.
-                #if os(macOS)
+                // Trên iOS, chỉ pause khi thực sự thoát khỏi màn hình (không phải khi ẩn app vào nền)
+                #if os(iOS)
+                if scenePhase != .background {
+                    player.pause()
+                    player.replaceCurrentItem(with: nil)
+                }
+                #else
                 player.pause()
                 player.replaceCurrentItem(with: nil)
                 #endif
@@ -41,6 +45,7 @@ struct VideoPlayerView: View {
         
         #if os(iOS)
         player.allowsExternalPlayback = true
+        player.preventsDisplaySleepDuringVideoPlayback = true
         if #available(iOS 15.0, *) {
             player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         }
@@ -176,6 +181,39 @@ struct VideoPlayerView: View {
         }
     }
 }
+
+// MARK: - Unified Player View for iOS/macOS
+#if os(iOS)
+struct PlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+    
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.allowsPictureInPicturePlayback = true
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.exitsFullScreenWhenPlaybackEnds = false
+        controller.updatesNowPlayingInfoCenter = false // Quản lý qua PlaybackManager
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
+}
+#else
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+    
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .floating
+        view.allowsPictureInPicturePlayback = true
+        return view
+    }
+    
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {}
+}
+#endif
 
 #Preview {
     VideoPlayerView(
