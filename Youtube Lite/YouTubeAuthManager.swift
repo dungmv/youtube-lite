@@ -8,6 +8,8 @@ public class YouTubeAuthManager: ObservableObject {
     
     @Published public var isLoggedIn: Bool = false
     @Published public var cookies: String = ""
+    @Published public var avatarUrl: URL? = nil
+    @Published public var displayName: String? = nil
     
     private let cookieName = "youtube_cookies"
     
@@ -19,6 +21,9 @@ public class YouTubeAuthManager: ObservableObject {
         if let storedCookies = UserDefaults.standard.string(forKey: cookieName) {
             self.cookies = storedCookies
             self.isLoggedIn = !storedCookies.isEmpty
+            if isLoggedIn {
+                Task { await fetchUserInfo() }
+            }
         }
     }
     
@@ -26,11 +31,27 @@ public class YouTubeAuthManager: ObservableObject {
         self.cookies = cookieString
         UserDefaults.standard.set(cookieString, forKey: cookieName)
         self.isLoggedIn = !cookieString.isEmpty
+        if isLoggedIn {
+            Task { await fetchUserInfo() }
+        }
+    }
+    
+    private func fetchUserInfo() async {
+        let extractor = YouTubeStreamExtractor(cookies: self.cookies)
+        do {
+            let profile = try await extractor.fetchProfile()
+            self.avatarUrl = profile.avatarUrl
+            self.displayName = profile.displayName
+        } catch {
+            print("Failed to fetch profile: \(error)")
+        }
     }
     
     public func logout() {
         self.cookies = ""
         self.isLoggedIn = false
+        self.avatarUrl = nil
+        self.displayName = nil
         UserDefaults.standard.removeObject(forKey: cookieName)
         
         // Clear WKWebView cookies

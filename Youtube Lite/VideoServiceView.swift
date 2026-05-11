@@ -60,10 +60,22 @@ struct VideoServiceView: View {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
         } label: {
-            Image(systemName: "person.crop.circle.fill")
-                .resizable()
-                .frame(width: 24, height: 24)
-                .foregroundColor(.blue)
+            if let avatarUrl = authManager.avatarUrl {
+                AsyncImage(url: avatarUrl) { image in
+                    image.resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                }
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .frame(width: 28, height: 28)
+                    .foregroundColor(.blue)
+            }
         }
     }
 
@@ -196,6 +208,6 @@ struct VideoServiceView: View {
     }
 }
 
-#Preview {
+#Preview("Video Service") {
     VideoServiceView()
 }

@@ -206,6 +206,89 @@ public final class YouTubeStreamExtractor {
         return parseBrowseResponse(json)
     }
 
+    /// Lấy thông tin profile của người dùng hiện tại
+    public func fetchProfile() async throws -> (displayName: String?, avatarUrl: URL?) {
+        let urlString = "https://www.youtube.com/youtubei/v1/guide?key=\(Self.innertubeAPIKey)"
+        guard let url = URL(string: urlString) else {
+            throw YouTubeExtractorError.parseError("URL API guide không hợp lệ")
+        }
+
+        let body: [String: Any] = [
+            "context": [
+                "client": [
+                    "clientName": Self.innertubeClientName,
+                    "clientVersion": Self.innertubeClientVersion,
+                    "androidSdkVersion": 30,
+                    "osName": "Android",
+                    "osVersion": "11",
+                    "hl": "en",
+                    "gl": "US",
+                ],
+            ]
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        
+        if let cookies = cookies {
+            request.setValue(cookies, forHTTPHeaderField: "Cookie")
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            return (nil, nil)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (nil, nil)
+        }
+
+        var displayName: String? = nil
+        var avatarUrl: URL? = nil
+
+        // Tìm tất cả các renderer có khả năng chứa thông tin profile
+        let profileRenderers = findAllRenderers(in: json, keys: [
+            "activeAccountHeaderRenderer", 
+            "accountItemRenderer", 
+            "accountThumbnail",
+            "identityRenderer"
+        ])
+        
+        for renderer in profileRenderers {
+            // 1. Lấy Display Name
+            if displayName == nil {
+                displayName = extractText(from: renderer["accountName"])
+                    ?? extractText(from: renderer["channelName"])
+                    ?? extractText(from: renderer["headerText"])
+            }
+            
+            // 2. Lấy Avatar URL
+            if avatarUrl == nil {
+                // Thử accountPhoto, thumbnail hoặc thumbnails trực tiếp
+                let photo = (renderer["accountPhoto"] as? [String: Any]) 
+                    ?? (renderer["thumbnail"] as? [String: Any]) 
+                    ?? renderer
+                
+                let thumbnails = photo["thumbnails"] as? [[String: Any]]
+                let thumbnailUrlString = thumbnails?.last?["url"] as? String
+                avatarUrl = thumbnailUrlString.flatMap { URL(string: $0) }
+            }
+            
+            if displayName != nil && avatarUrl != nil {
+                break
+            }
+        }
+        
+        print("YouTube Profile Fetched: \(displayName ?? "nil"), \(avatarUrl?.absoluteString ?? "nil")")
+        return (displayName, avatarUrl)
+    }
+
     private func parseBrowseResponse(_ json: [String: Any]) -> [YouTubeVideo] {
         return parseSearchResponse(json) // Dùng chung logic tìm renderer cho browse
     }
