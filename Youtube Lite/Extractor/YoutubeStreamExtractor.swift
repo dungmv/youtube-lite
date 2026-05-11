@@ -317,9 +317,16 @@ public final class YouTubeStreamExtractor {
     private func parseSearchResponse(_ json: [String: Any]) -> [YouTubeVideo] {
         var videos: [YouTubeVideo] = []
         
-        // Tìm tất cả videoRenderer, compactVideoRenderer, playlistVideoRenderer, reelItemRenderer trong toàn bộ JSON
-        let videoRenderers = findAllRenderers(in: json, keys: ["videoRenderer", "compactVideoRenderer", "playlistVideoRenderer", "reelItemRenderer"])
-        print("YouTube Search: Found \(videoRenderers.count) potential video renderers")
+        // Tìm tất cả videoRenderer, compactVideoRenderer, gridVideoRenderer, richVideoRenderer, playlistVideoRenderer, reelItemRenderer trong toàn bộ JSON
+        let videoRenderers = findAllRenderers(in: json, keys: [
+            "videoRenderer", 
+            "compactVideoRenderer", 
+            "gridVideoRenderer", 
+            "richVideoRenderer", 
+            "playlistVideoRenderer", 
+            "reelItemRenderer"
+        ])
+        print("YouTube Parse: Found \(videoRenderers.count) potential video renderers")
 
         for renderer in videoRenderers {
             if let video = parseVideoRenderer(renderer) {
@@ -327,13 +334,23 @@ public final class YouTubeStreamExtractor {
             }
         }
 
-        print("YouTube Search final videos count: \(videos.count)")
+        print("YouTube Parse final videos count: \(videos.count)")
         return videos
     }
 
 
     private func parseVideoRenderer(_ renderer: [String: Any]) -> YouTubeVideo? {
-        guard let videoId = renderer["videoId"] as? String else { 
+        // Một số renderer dùng 'videoId' ở top level, số khác lồng trong navigationEndpoint
+        var videoId: String? = renderer["videoId"] as? String
+        
+        if videoId == nil {
+            let nav = renderer["navigationEndpoint"] as? [String: Any]
+            let watch = (nav?["watchEndpoint"] as? [String: Any]) 
+                ?? (nav?["reelWatchEndpoint"] as? [String: Any])
+            videoId = watch?["videoId"] as? String
+        }
+        
+        guard let id = videoId else { 
             return nil 
         }
         
@@ -347,12 +364,14 @@ public final class YouTubeStreamExtractor {
         
         let channelName = extractText(from: renderer["longBylineText"])
             ?? extractText(from: renderer["shortBylineText"])
+            ?? extractText(from: renderer["ownerText"])
         
         let lengthText = extractText(from: renderer["lengthText"])
         let viewCount = extractText(from: renderer["viewCountText"])
+            ?? extractText(from: renderer["shortViewCountText"])
         
         return YouTubeVideo(
-            id: videoId,
+            id: id,
             title: titleText,
             thumbnailUrl: thumbnailUrl,
             channelName: channelName,

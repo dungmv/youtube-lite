@@ -21,7 +21,7 @@ struct VideoPlayerView: View {
             .onAppear {
                 loadVideo()
             }
-            .onChange(of: selectedStream) { _ in
+            .onChange(of: selectedStream) {
                 loadVideo()
             }
             .onDisappear {
