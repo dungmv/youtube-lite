@@ -3,19 +3,19 @@ import JavaScriptCore
 
 // MARK: - InnerTube Response Models
 
-struct YouTubePlayerResponse: Codable {
+nonisolated struct YouTubePlayerResponse: Codable {
     let streamingData: StreamingData?
     let videoDetails: VideoDetails?
     let playabilityStatus: PlayabilityStatus?
 }
 
-struct StreamingData: Codable {
+nonisolated struct StreamingData: Codable {
     let formats: [VideoFormat]?
     let adaptiveFormats: [VideoFormat]?
     let expiresInSeconds: String?
 }
 
-struct VideoFormat: Codable {
+nonisolated struct VideoFormat: Codable {
     let itag: Int
     let url: String?
     let signatureCipher: String?
@@ -37,7 +37,7 @@ struct VideoFormat: Codable {
     let highReplication: Bool?
 }
 
-struct VideoDetails: Codable {
+nonisolated struct VideoDetails: Codable {
     let videoId: String?
     let title: String?
     let lengthSeconds: String?
@@ -54,48 +54,48 @@ struct VideoDetails: Codable {
     let isLiveContent: Bool?
 }
 
-struct Thumbnail: Codable {
+nonisolated struct Thumbnail: Codable {
     let thumbnails: [ThumbnailItem]?
 }
 
-struct ThumbnailItem: Codable {
+nonisolated struct ThumbnailItem: Codable {
     let url: String?
     let width: Int?
     let height: Int?
 }
 
-struct PlayabilityStatus: Codable {
+nonisolated struct PlayabilityStatus: Codable {
     let status: String?
     let reason: String?
     let errorScreen: ErrorScreen?
 }
 
-struct ErrorScreen: Codable {
+nonisolated struct ErrorScreen: Codable {
     let playerErrorMessageRenderer: PlayerErrorMessageRenderer?
 }
 
-struct PlayerErrorMessageRenderer: Codable {
+nonisolated struct PlayerErrorMessageRenderer: Codable {
     let reason: TextRun?
     let subreason: TextRun?
 }
 
-struct TextRun: Codable {
+nonisolated struct TextRun: Codable {
     let runs: [RunItem]?
 }
 
-struct RunItem: Codable {
+nonisolated struct RunItem: Codable {
     let text: String?
 }
 
 // MARK: - Request Models
 
-struct InnerTubeContext: Codable {
+nonisolated struct InnerTubeContext: Codable {
     let client: YouTubeClient
     let user: YouTubeUser?
     let request: YouTubeRequest?
 }
 
-struct YouTubeClient: Codable {
+nonisolated struct YouTubeClient: Codable {
     let hl: String
     let gl: String
     let clientName: String
@@ -104,17 +104,17 @@ struct YouTubeClient: Codable {
     let clientFormFactor: String
 }
 
-struct YouTubeUser: Codable {
+nonisolated struct YouTubeUser: Codable {
     let lockedSafetyMode: Bool
 }
 
-struct YouTubeRequest: Codable {
+nonisolated struct YouTubeRequest: Codable {
     let useSsl: Bool
     let contentCheckOk: Bool?
     let racyCheckOk: Bool?
 }
 
-struct PlaybackContext: Codable {
+nonisolated struct PlaybackContext: Codable {
     let contentPlaybackContext: ContentPlaybackContext?
 }
 
@@ -149,6 +149,9 @@ struct YouTubePageConfig {
     var signatureTimestamp: Int? = nil
 }
 
+/// ⚠️ DEPRECATED: Use `YouTubeStreamExtractor` (Extractor/Youtubestreamextractor.swift) instead.
+/// The Extractor uses android_sdkless Innertube client — no JS engine needed, no signature deciphering.
+/// This class is kept for backward compatibility and may be removed in a future version.
 class YouTubeService {
     static let shared = YouTubeService()
     
