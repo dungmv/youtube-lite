@@ -16,32 +16,48 @@ struct VideoServiceView: View {
     private let extractor = YouTubeStreamExtractor()
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                inputBar
-                if let title = videoInfo?.title {
-                    Text(title)
-                        .font(.headline)
-                        .lineLimit(2)
-                        .padding(.horizontal)
-                        .padding(.top, 4)
-                }
-                if let error = errorMessage {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .padding(.horizontal)
-                }
-                if isLoading {
-                    ProgressView("Fetching video links…")
-                        .padding()
-                }
-                streamList
-            }
-            .navigationTitle("YouTube Link Extractor")
-            .onAppear { fetchLinks() }
-            .sheet(item: $selectedStream) { stream in
+        NavigationSplitView {
+            sidebar
+                .navigationTitle("YouTube Link Extractor")
+        } detail: {
+            if let stream = selectedStream {
                 VideoPlayerView(url: stream.url, title: stream.quality)
+            } else {
+                ContentUnavailableView("No Video Selected",
+                    systemImage: "play.rectangle",
+                    description: Text("Select a stream from the sidebar to play"))
+                    .navigationTitle("YouTube Lite")
             }
+        }
+        .onAppear { fetchLinks() }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            inputBar
+            if let title = videoInfo?.title {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(2)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+            }
+            if let error = errorMessage {
+                Text(error)
+                    .foregroundColor(.red)
+                    .padding(.horizontal)
+            }
+            if isLoading {
+                ProgressView("Fetching video links…")
+                    .padding()
+            }
+            List(selection: $selectedStream) {
+                ForEach(allStreams) { stream in
+                    streamRow(stream)
+                        .tag(stream)
+                }
+            }
+            .listStyle(.plain)
         }
     }
 
@@ -70,42 +86,36 @@ struct VideoServiceView: View {
         return info.muxedStreams + info.videoStreams + info.audioStreams
     }
 
-    private var streamList: some View {
-        List(allStreams) { stream in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("itag \(stream.itag)").bold()
-                    Text(stream.quality).foregroundColor(.secondary)
-                    streamTypeBadge(stream)
-                }
-                Text(stream.mimeType).font(.caption)
-                Text(stream.url.absoluteString)
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .contextMenu {
-                        Button("Copy URL") {
-#if os(iOS)
-                            UIPasteboard.general.string = stream.url.absoluteString
-#elseif os(macOS)
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(stream.url.absoluteString, forType: .string)
-#endif
-                        }
-                    }
-                if let width = stream.width, let height = stream.height {
-                    Text("\(width)×\(height)").font(.caption2).foregroundColor(.secondary)
-                }
-                if let bitrate = stream.bitrate {
-                    Text("\(bitrate / 1000) kbps").font(.caption2).foregroundColor(.secondary)
-                }
+    private func streamRow(_ stream: YouTubeStream) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("itag \(stream.itag)").bold()
+                Text(stream.quality).foregroundColor(.secondary)
+                streamTypeBadge(stream)
             }
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                selectedStream = stream
+            Text(stream.mimeType).font(.caption)
+            Text(stream.url.absoluteString)
+                .font(.caption2)
+                .lineLimit(2)
+                .contextMenu {
+                    Button("Copy URL") {
+#if os(iOS)
+                        UIPasteboard.general.string = stream.url.absoluteString
+#elseif os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(stream.url.absoluteString, forType: .string)
+#endif
+                    }
+                }
+            if let width = stream.width, let height = stream.height {
+                Text("\(width)×\(height)").font(.caption2).foregroundColor(.secondary)
+            }
+            if let bitrate = stream.bitrate {
+                Text("\(bitrate / 1000) kbps").font(.caption2).foregroundColor(.secondary)
             }
         }
-        .listStyle(.plain)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

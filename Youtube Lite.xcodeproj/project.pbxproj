@@ -283,8 +283,9 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
 				XROS_DEPLOYMENT_TARGET = 26.4;
-			};
-			name = Debug;
+								INFOPLIST_KEY_UIBackgroundModes = (audio);
+							};
+							name = Debug;
 		};
 		5C0B99852F8787A2000E59E0 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -328,8 +329,9 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
 				XROS_DEPLOYMENT_TARGET = 26.4;
-			};
-			name = Release;
+								INFOPLIST_KEY_UIBackgroundModes = (audio);
+							};
+							name = Release;
 		};
 /* End XCBuildConfiguration section */
 

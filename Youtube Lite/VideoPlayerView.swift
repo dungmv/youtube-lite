@@ -4,27 +4,29 @@ import AVKit
 struct VideoPlayerView: View {
     let url: URL
     let title: String
-    
-    @Environment(\.dismiss) private var dismiss
-    
+
+    @State private var player: AVPlayer?
+
     var body: some View {
-        NavigationView {
-            VideoPlayer(player: AVPlayer(url: url))
-                .navigationTitle(title)
-#if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-#endif
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            dismiss()
-                        }
-                    }
-                }
+        Group {
+            if let player = player {
+                VideoPlayer(player: player)
+            } else {
+                ProgressView("Loading video...")
+            }
         }
-#if os(iOS)
-        .navigationViewStyle(.stack)
+#if os(macOS)
+        .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
 #endif
+        .onAppear {
+            let player = AVPlayer(url: url)
+            player.play()
+            self.player = player
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
+        }
     }
 }
 

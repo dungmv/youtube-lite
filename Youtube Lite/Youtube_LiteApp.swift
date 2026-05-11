@@ -7,9 +7,21 @@
 
 import SwiftUI
 import SwiftData
+import AVFoundation
 
 @main
 struct Youtube_LiteApp: App {
+    init() {
+#if os(iOS) || os(visionOS)
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("⚠️ Audio session config failed: \(error.localizedDescription)")
+        }
+#endif
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
         ])
