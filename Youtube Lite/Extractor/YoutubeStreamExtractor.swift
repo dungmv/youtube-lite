@@ -8,7 +8,7 @@ import Foundation
 // MARK: - Models
 
 public struct YouTubeStream: Identifiable, Hashable {
-    public var id: Int { itag }
+    public var id: String { "\(itag)-\(isAdaptive)-\(url.absoluteString.hashValue)" }
     public let itag: Int
     public let url: URL
     public let mimeType: String

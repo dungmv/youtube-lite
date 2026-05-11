@@ -30,7 +30,9 @@ struct Youtube_LiteApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            print("❌ Could not create ModelContainer: \(error)")
+            // Fallback to in-memory container to avoid crash
+            return try! ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
         }
     }()
 
