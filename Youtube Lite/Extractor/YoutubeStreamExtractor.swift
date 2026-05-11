@@ -86,9 +86,11 @@ public final class YouTubeStreamExtractor {
     private static let userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11)"
 
     private let session: URLSession
+    private let cookies: String?
 
-    public init(session: URLSession = .shared) {
+    public init(session: URLSession = .shared, cookies: String? = nil) {
         self.session = session
+        self.cookies = cookies
     }
 
     // MARK: - Public API
@@ -173,6 +175,10 @@ public final class YouTubeStreamExtractor {
         request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
         request.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
+        
+        if let cookies = cookies {
+            request.setValue(cookies, forHTTPHeaderField: "Cookie")
+        }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

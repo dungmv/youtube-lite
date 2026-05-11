@@ -12,8 +12,8 @@ struct VideoServiceView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedStream: YouTubeStream?
-
-    private let extractor = YouTubeStreamExtractor()
+    @State private var showLogin = false
+    @StateObject private var authManager = YouTubeAuthManager.shared
 
     var body: some View {
         NavigationSplitView {
@@ -34,6 +34,33 @@ struct VideoServiceView: View {
             }
         }
         .onAppear { fetchLinks() }
+        .sheet(isPresented: $showLogin) {
+            YouTubeLoginView()
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                if authManager.isLoggedIn {
+                    profileMenu
+                } else {
+                    Button(action: { showLogin = true }) {
+                        Label("Login", systemImage: "person.circle")
+                    }
+                }
+            }
+        }
+    }
+
+    private var profileMenu: some View {
+        Menu {
+            Button(role: .destructive, action: { authManager.logout() }) {
+                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } label: {
+            Image(systemName: "person.crop.circle.fill")
+                .resizable()
+                .frame(width: 24, height: 24)
+                .foregroundColor(.blue)
+        }
     }
 
     private var sidebar: some View {
@@ -155,6 +182,7 @@ struct VideoServiceView: View {
 
         Task {
             do {
+                let extractor = YouTubeStreamExtractor(cookies: authManager.cookies)
                 let info = try await extractor.extract(videoIDOrURL: trimmed)
                 await MainActor.run {
                     self.videoInfo = info
