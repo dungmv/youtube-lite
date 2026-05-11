@@ -6,10 +6,11 @@ import CoreMedia
 struct VideoPlayerView: View {
     let videoURL: URL
     let audioURL: URL?
+    let visitorData: String?
     let title: String
 
     var body: some View {
-        AVPlayerContainerView(videoURL: videoURL, audioURL: audioURL)
+        AVPlayerContainerView(videoURL: videoURL, audioURL: audioURL, visitorData: visitorData)
             .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
             .navigationTitle(title)
     }
@@ -18,6 +19,7 @@ struct VideoPlayerView: View {
 struct AVPlayerContainerView: NSViewRepresentable {
     let videoURL: URL
     let audioURL: URL?
+    let visitorData: String?
 
     func makeNSView(context: Context) -> AVPlayerView {
         let playerView = AVPlayerView()
@@ -28,7 +30,7 @@ struct AVPlayerContainerView: NSViewRepresentable {
         playerView.player = player
         
         Task {
-            let playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL)
+            let playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL, visitorData: visitorData)
             await MainActor.run {
                 player.replaceCurrentItem(with: playerItem)
                 player.play()
@@ -46,18 +48,26 @@ struct AVPlayerContainerView: NSViewRepresentable {
         nsView.player = nil
     }
     
-    private func createPlayerItem(videoURL: URL, audioURL: URL?) async -> AVPlayerItem {
+    private func createPlayerItem(videoURL: URL, audioURL: URL?, visitorData: String?) async -> AVPlayerItem {
+        var headers: [String: String] = [
+            "User-Agent": "com.google.android.youtube/19.29.37 (Linux; U; Android 11; en_US; Pixel 5; Build/RQ3A.210605.005)",
+            "Origin": "https://www.youtube.com",
+            "Referer": "https://www.youtube.com/",
+            "Range": "bytes=0-"
+        ]
+        
+        if let visitorData = visitorData {
+            headers["X-Goog-Visitor-Id"] = visitorData
+        }
+
+        let options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
+
         guard let audioURL = audioURL else {
-            let headers = ["User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"]
-            let options = ["AVURLAssetHTTPHeaderFieldsKey": headers]
             let asset = AVURLAsset(url: videoURL, options: options)
             return AVPlayerItem(asset: asset)
         }
         
         let composition = AVMutableComposition()
-        
-        let headers = ["User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"]
-        let options = ["AVURLAssetHTTPHeaderFieldsKey": headers]
         
         let videoAsset = AVURLAsset(url: videoURL, options: options)
         let audioAsset = AVURLAsset(url: audioURL, options: options)
@@ -90,6 +100,7 @@ struct AVPlayerContainerView: NSViewRepresentable {
     VideoPlayerView(
         videoURL: URL(string: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")!,
         audioURL: nil,
+        visitorData: nil,
         title: "Preview Video"
     )
 }

@@ -27,6 +27,7 @@ public struct YouTubeVideoInfo {
     public let videoId: String
     public let title: String
     public let duration: Int?         // giây
+    public let visitorData: String?             // Token cho playback
     public let muxedStreams: [YouTubeStream]    // video + audio trong 1 file (dễ play nhất)
     public let videoStreams: [YouTubeStream]    // chỉ video (adaptive)
     public let audioStreams: [YouTubeStream]    // chỉ audio (adaptive)
@@ -267,10 +268,13 @@ public final class YouTubeStreamExtractor {
             }
         }
 
+        let visitorData = (response["responseContext"] as? [String: Any])?["visitorData"] as? String
+
         return YouTubeVideoInfo(
             videoId: videoID,
             title: title,
             duration: duration,
+            visitorData: visitorData,
             muxedStreams: muxedStreams,
             videoStreams: videoStreams,
             audioStreams: audioStreams

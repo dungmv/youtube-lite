@@ -7,7 +7,7 @@ import AppKit
 import AVKit
 
 struct VideoServiceView: View {
-    @State private var videoID = "dQw4w9WgXcQ"
+    @State private var videoID = "k8m0SaGQ_1c"
     @State private var videoInfo: YouTubeVideoInfo?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -24,7 +24,7 @@ struct VideoServiceView: View {
                 let videoURL: URL = stream.isVideoOnly ? stream.url : (stream.isAudioOnly ? (videoInfo?.bestVideoStream?.url ?? stream.url) : stream.url)
                 let audioURL: URL? = stream.isVideoOnly ? videoInfo?.bestAudioStream?.url : (stream.isAudioOnly ? stream.url : nil)
                 
-                VideoPlayerView(videoURL: videoURL, audioURL: audioURL, title: stream.quality)
+                VideoPlayerView(videoURL: videoURL, audioURL: audioURL, visitorData: videoInfo?.visitorData, title: stream.quality)
                     .id(stream.id)
             } else {
                 ContentUnavailableView("No Video Selected",
