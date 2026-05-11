@@ -203,113 +203,70 @@ public final class YouTubeStreamExtractor {
             throw YouTubeExtractorError.parseError("Không parse được JSON browse response")
         }
 
-        print("YouTube Browse Response Keys: \(json.keys)")
         return parseBrowseResponse(json)
+    }
+
+    private func parseBrowseResponse(_ json: [String: Any]) -> [YouTubeVideo] {
+        return parseSearchResponse(json) // Dùng chung logic tìm renderer cho browse
+    }
+
+    /// Tìm tất cả các dictionary có key nằm trong danh sách `keys`
+    private func findAllRenderers(in json: Any, keys: [String]) -> [[String: Any]] {
+        var results: [[String: Any]] = []
+        
+        if let dict = json as? [String: Any] {
+            for (key, value) in dict {
+                if keys.contains(key), let renderer = value as? [String: Any] {
+                    results.append(renderer)
+                } else {
+                    results.append(contentsOf: findAllRenderers(in: value, keys: keys))
+                }
+            }
+        } else if let array = json as? [Any] {
+            for item in array {
+                results.append(contentsOf: findAllRenderers(in: item, keys: keys))
+            }
+        }
+        
+        return results
     }
 
     private func parseSearchResponse(_ json: [String: Any]) -> [YouTubeVideo] {
         var videos: [YouTubeVideo] = []
         
-        // Cấu trúc search có thể nằm trong contents.sectionListRenderer hoặc onResponseReceivedCommands
-        let contents = json["contents"] as? [String: Any]
-        let sectionList = contents?["sectionListRenderer"] as? [String: Any]
-        let contentsArray = sectionList?["contents"] as? [[String: Any]]
-            ?? ((json["onResponseReceivedCommands"] as? [[String: Any]])?.first?["appendContinuationItemsAction"] as? [String: Any])?["continuationItems"] as? [[String: Any]]
+        // Tìm tất cả videoRenderer, compactVideoRenderer, playlistVideoRenderer, reelItemRenderer trong toàn bộ JSON
+        let videoRenderers = findAllRenderers(in: json, keys: ["videoRenderer", "compactVideoRenderer", "playlistVideoRenderer", "reelItemRenderer"])
+        print("YouTube Search: Found \(videoRenderers.count) potential video renderers")
 
-        print("YouTube Search contentsArray count: \(contentsArray?.count ?? 0)")
-        guard let items = contentsArray else { 
-            print("YouTube Search: contentsArray is NIL")
-            return [] 
-        }
-
-        for item in items {
-            print("YouTube Search item keys: \(item.keys)")
-            // Trường hợp itemSectionRenderer
-            if let itemSectionRenderer = item["itemSectionRenderer"] as? [String: Any],
-               let sectionContents = itemSectionRenderer["contents"] as? [[String: Any]] {
-                print("YouTube Search itemSectionRenderer contents count: \(sectionContents.count)")
-                for content in sectionContents {
-                    print("YouTube Search content keys: \(content.keys)")
-                    if let videoRenderer = (content["videoRenderer"] as? [String: Any]) ?? (content["compactVideoRenderer"] as? [String: Any]),
-                       let video = parseVideoRenderer(videoRenderer) {
-                        videos.append(video)
-                    }
-                }
-            }
-            // Trường hợp videoRenderer trực tiếp (trong continuation)
-            else if let videoRenderer = (item["videoRenderer"] as? [String: Any]) ?? (item["compactVideoRenderer"] as? [String: Any]) {
-                if let video = parseVideoRenderer(videoRenderer) {
-                    videos.append(video)
-                }
-            }
-        }
-
-        return videos
-    }
-
-    private func parseBrowseResponse(_ json: [String: Any]) -> [YouTubeVideo] {
-        var videos: [YouTubeVideo] = []
-        
-        guard let contents = json["contents"] as? [String: Any] else {
-            print("YouTube Browse: contents is NIL")
-            return []
-        }
-        
-        guard let twoColumnBrowseResultsRenderer = contents["twoColumnBrowseResultsRenderer"] as? [String: Any] else {
-            print("YouTube Browse: twoColumnBrowseResultsRenderer is NIL")
-            // Thử cấu trúc khác cho Android
-            if let sectionList = contents["sectionListRenderer"] as? [String: Any],
-               let items = sectionList["contents"] as? [[String: Any]] {
-                print("YouTube Browse: fallback to sectionListRenderer")
-                return parseSearchResponse(json) // sectionList cấu trúc giống search
-            }
-            return []
-        }
-        
-        guard let tabs = twoColumnBrowseResultsRenderer["tabs"] as? [[String: Any]],
-              let tabRenderer = tabs.first?["tabRenderer"] as? [String: Any],
-              let tabContent = tabRenderer["content"] as? [String: Any],
-              let richGridRenderer = tabContent["richGridRenderer"] as? [String: Any],
-              let contentsArray = richGridRenderer["contents"] as? [[String: Any]] else {
-            print("YouTube Browse: Failed to parse tabs or richGridRenderer")
-            return []
-        }
-
-        print("YouTube Browse contentsArray count: \(contentsArray.count)")
-
-        for item in contentsArray {
-            if let richItemRenderer = item["richItemRenderer"] as? [String: Any],
-               let content = richItemRenderer["content"] as? [String: Any],
-               let videoRenderer = content["videoRenderer"] as? [String: Any],
-               let video = parseVideoRenderer(videoRenderer) {
+        for renderer in videoRenderers {
+            if let video = parseVideoRenderer(renderer) {
                 videos.append(video)
             }
         }
 
+        print("YouTube Search final videos count: \(videos.count)")
         return videos
     }
 
+
     private func parseVideoRenderer(_ renderer: [String: Any]) -> YouTubeVideo? {
         guard let videoId = renderer["videoId"] as? String else { 
-            print("YouTube parseVideoRenderer: videoId missing in \(renderer.keys)")
             return nil 
         }
         
-        let title = ((renderer["title"] as? [String: Any])?["runs"] as? [[String: Any]])
-            ?? ((renderer["headline"] as? [String: Any])?["runs"] as? [[String: Any]])
-        let titleText = title?.first?["text"] as? String ?? "Unknown Title"
+        let titleText = extractText(from: renderer["title"]) 
+            ?? extractText(from: renderer["headline"])
+            ?? "Unknown Title"
         
         let thumbnails = (renderer["thumbnail"] as? [String: Any])?["thumbnails"] as? [[String: Any]]
         let thumbnailUrlString = thumbnails?.last?["url"] as? String
         let thumbnailUrl = thumbnailUrlString.flatMap { URL(string: $0) }
         
-        let ownerText = ((renderer["longBylineText"] as? [String: Any])?["runs"] as? [[String: Any]])
-            ?? ((renderer["shortBylineText"] as? [String: Any])?["runs"] as? [[String: Any]])
-        let channelName = ownerText?.first?["text"] as? String
+        let channelName = extractText(from: renderer["longBylineText"])
+            ?? extractText(from: renderer["shortBylineText"])
         
-        let lengthText = (renderer["lengthText"] as? [String: Any])?["simpleText"] as? String
-            ?? (renderer["lengthText"] as? [String: Any])?["accessibility"]?["accessibilityData"]?["label"] as? String
-        let viewCount = (renderer["viewCountText"] as? [String: Any])?["simpleText"] as? String
+        let lengthText = extractText(from: renderer["lengthText"])
+        let viewCount = extractText(from: renderer["viewCountText"])
         
         return YouTubeVideo(
             id: videoId,
@@ -319,6 +276,26 @@ public final class YouTubeStreamExtractor {
             duration: lengthText,
             viewCount: viewCount
         )
+    }
+
+    /// Helper để lấy text từ các object có cấu trúc 'simpleText' hoặc 'runs'
+    private func extractText(from object: Any?) -> String? {
+        guard let dict = object as? [String: Any] else { return nil }
+        
+        if let simpleText = dict["simpleText"] as? String {
+            return simpleText
+        }
+        
+        if let runs = dict["runs"] as? [[String: Any]] {
+            return runs.compactMap { $0["text"] as? String }.joined()
+        }
+        
+        if let accessibility = dict["accessibility"] as? [String: Any],
+           let label = (accessibility["accessibilityData"] as? [String: Any])?["label"] as? String {
+            return label
+        }
+        
+        return nil
     }
 
     // MARK: - Step 1: Extract Video ID
