@@ -19,15 +19,49 @@ struct VideoPlayerView: View {
                 }
             }
             .onAppear {
+                setupPlayer()
                 loadVideo()
             }
             .onChange(of: selectedStream) {
                 loadVideo()
             }
             .onDisappear {
+                // Trên iOS, ta có thể không muốn pause khi disappear nếu muốn chạy nền
+                // Nhưng nếu người dùng thoát khỏi màn hình video (back), ta nên pause.
+                // Nếu chỉ là app backgrounding, onDisappear thường không gọi cho root view.
+                #if os(macOS)
                 player.pause()
                 player.replaceCurrentItem(with: nil)
+                #endif
             }
+    }
+
+    private func setupPlayer() {
+        PlaybackManager.shared.setPlayer(player)
+        
+        #if os(iOS)
+        player.allowsExternalPlayback = true
+        if #available(iOS 15.0, *) {
+            player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        }
+        #endif
+        
+        // Theo dõi thời gian để cập nhật Now Playing
+        player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { time in
+            updateNowPlaying(currentTime: time.seconds)
+        }
+    }
+
+    private func updateNowPlaying(currentTime: Double? = nil) {
+        let duration = Double(videoInfo.duration ?? 0)
+        let current = currentTime ?? player.currentTime().seconds
+        
+        PlaybackManager.shared.updateNowPlaying(
+            title: videoInfo.title,
+            duration: duration,
+            currentTime: current,
+            thumbnail: videoInfo.thumbnailUrl
+        )
     }
 
     private var streamSelectionMenu: some View {
@@ -65,6 +99,7 @@ struct VideoPlayerView: View {
             await MainActor.run {
                 player.replaceCurrentItem(with: playerItem)
                 player.play()
+                updateNowPlaying()
             }
         }
     }
@@ -144,7 +179,7 @@ struct VideoPlayerView: View {
 
 #Preview {
     VideoPlayerView(
-        videoInfo: YouTubeVideoInfo(videoId: "abc", title: "Test", duration: 100, visitorData: nil, muxedStreams: [], videoStreams: [], audioStreams: []),
+        videoInfo: YouTubeVideoInfo(videoId: "abc", title: "Test", duration: 100, visitorData: nil, thumbnailUrl: nil, muxedStreams: [], videoStreams: [], audioStreams: []),
         selectedStream: .constant(YouTubeStream(itag: 18, url: URL(string: "https://example.com")!, mimeType: "video/mp4", quality: "360p", width: 640, height: 360, bitrate: 500000, audioSampleRate: nil, isAdaptive: false))
     )
 }

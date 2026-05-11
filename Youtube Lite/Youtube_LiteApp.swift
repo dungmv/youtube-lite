@@ -13,8 +13,10 @@ struct Youtube_LiteApp: App {
     init() {
 #if os(iOS) || os(visionOS)
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-            try AVAudioSession.sharedInstance().setActive(true)
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true)
+            print("✅ Audio session configured for background playback")
         } catch {
             print("⚠️ Audio session config failed: \(error.localizedDescription)")
         }

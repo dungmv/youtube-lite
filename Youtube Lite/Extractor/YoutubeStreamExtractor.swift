@@ -28,6 +28,7 @@ public struct YouTubeVideoInfo {
     public let title: String
     public let duration: Int?         // giây
     public let visitorData: String?             // Token cho playback
+    public let thumbnailUrl: URL?               // Hình nền video
     public let muxedStreams: [YouTubeStream]    // video + audio trong 1 file (dễ play nhất)
     public let videoStreams: [YouTubeStream]    // chỉ video (adaptive)
     public let audioStreams: [YouTubeStream]    // chỉ audio (adaptive)
@@ -537,6 +538,14 @@ public final class YouTubeStreamExtractor {
             duration = nil
         }
 
+        // Lấy thumbnail
+        var thumbnailUrl: URL? = nil
+        if let videoDetails = response["videoDetails"] as? [String: Any],
+           let thumbnails = (videoDetails["thumbnail"] as? [String: Any])?["thumbnails"] as? [[String: Any]],
+           let urlStr = thumbnails.last?["url"] as? String {
+            thumbnailUrl = URL(string: urlStr)
+        }
+
         // Lấy streamingData
         guard let streamingData = response["streamingData"] as? [String: Any] else {
             throw YouTubeExtractorError.parseError("Không tìm thấy streamingData")
@@ -588,6 +597,7 @@ public final class YouTubeStreamExtractor {
             title: title,
             duration: duration,
             visitorData: visitorData,
+            thumbnailUrl: thumbnailUrl,
             muxedStreams: muxedStreams,
             videoStreams: videoStreams,
             audioStreams: audioStreams
