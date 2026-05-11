@@ -36,14 +36,22 @@ public struct YouTubeVideoInfo {
         muxedStreams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
     }
 
-    /// Stream video adaptive chất lượng cao nhất
+    /// Stream video adaptive chất lượng cao nhất (ưu tiên mp4)
     public var bestVideoStream: YouTubeStream? {
-        videoStreams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
+        let mp4Streams = videoStreams.filter { $0.mimeType.contains("video/mp4") }
+        if !mp4Streams.isEmpty {
+            return mp4Streams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
+        }
+        return videoStreams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
     }
 
-    /// Stream audio adaptive bitrate cao nhất
+    /// Stream audio adaptive bitrate cao nhất (ưu tiên mp4/m4a)
     public var bestAudioStream: YouTubeStream? {
-        audioStreams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) })
+        let mp4Streams = audioStreams.filter { $0.mimeType.contains("audio/mp4") || $0.mimeType.contains("audio/m4a") }
+        if !mp4Streams.isEmpty {
+            return mp4Streams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) })
+        }
+        return audioStreams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) })
     }
 }
 
@@ -229,6 +237,10 @@ public final class YouTubeStreamExtractor {
         if let formats = streamingData["formats"] as? [[String: Any]] {
             for fmt in formats {
                 if let stream = parseStreamFormat(fmt, isAdaptive: false) {
+                    // Lọc bỏ WebM cho muxed streams
+                    if stream.mimeType.lowercased().contains("webm") {
+                        continue
+                    }
                     muxedStreams.append(stream)
                 }
             }
@@ -239,7 +251,14 @@ public final class YouTubeStreamExtractor {
         if let adaptiveFormats = streamingData["adaptiveFormats"] as? [[String: Any]] {
             for fmt in adaptiveFormats {
                 guard let stream = parseStreamFormat(fmt, isAdaptive: true) else { continue }
+                
+                // AVFoundation (AVPlayer) không hỗ trợ tốt WebM/VP9 mặc định
+                // Lọc bỏ WebM để tránh lỗi -11828 "Cannot Open"
                 let mime = stream.mimeType.lowercased()
+                if mime.contains("webm") {
+                    continue
+                }
+
                 if mime.hasPrefix("audio/") {
                     audioStreams.append(stream)
                 } else {

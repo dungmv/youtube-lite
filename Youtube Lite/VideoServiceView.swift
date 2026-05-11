@@ -21,7 +21,10 @@ struct VideoServiceView: View {
                 .navigationTitle("YouTube Link Extractor")
         } detail: {
             if let stream = selectedStream {
-                VideoPlayerView(url: stream.url, title: stream.quality)
+                let videoURL: URL = stream.isVideoOnly ? stream.url : (stream.isAudioOnly ? (videoInfo?.bestVideoStream?.url ?? stream.url) : stream.url)
+                let audioURL: URL? = stream.isVideoOnly ? videoInfo?.bestAudioStream?.url : (stream.isAudioOnly ? stream.url : nil)
+                
+                VideoPlayerView(videoURL: videoURL, audioURL: audioURL, title: stream.quality)
                     .id(stream.id)
             } else {
                 ContentUnavailableView("No Video Selected",
