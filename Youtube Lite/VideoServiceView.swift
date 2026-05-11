@@ -22,6 +22,7 @@ struct VideoServiceView: View {
         } detail: {
             if let stream = selectedStream {
                 VideoPlayerView(url: stream.url, title: stream.quality)
+                    .id(stream.id)
             } else {
                 ContentUnavailableView("No Video Selected",
                     systemImage: "play.rectangle",
