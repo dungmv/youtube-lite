@@ -83,7 +83,7 @@ public final class YouTubeStreamExtractor {
     private static let innertubeClientName = "ANDROID"
     private static let innertubeClientVersion = "20.10.38"
     private static let innertubeClientNameID = 3
-    private static let userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip"
+    private static let userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11)"
 
     private let session: URLSession
 
@@ -112,8 +112,11 @@ public final class YouTubeStreamExtractor {
 
         // Các pattern URL YouTube phổ biến
         let patterns = [
-            #"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})"#,
-            #"youtube\.com/.*[?&]v=([a-zA-Z0-9_-]{11})"#,
+            #"(?:https?://)?(?:www\.)?youtube\.com/watch\?.*v=([a-zA-Z0-9_-]{11})"#,
+            #"(?:https?://)?(?:www\.)?youtu\.be/([a-zA-Z0-9_-]{11})"#,
+            #"(?:https?://)?(?:www\.)?youtube\.com/embed/([a-zA-Z0-9_-]{11})"#,
+            #"(?:https?://)?(?:www\.)?youtube\.com/v/([a-zA-Z0-9_-]{11})"#,
+            #"(?:https?://)?(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})"#,
         ]
 
         for pattern in patterns {
@@ -169,16 +172,22 @@ public final class YouTubeStreamExtractor {
         request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw YouTubeExtractorError.networkError(
-                URLError(.badServerResponse)
-            )
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw YouTubeExtractorError.networkError(URLError(.badServerResponse))
+        }
+        
+        if httpResponse.statusCode != 200 {
+            print("YouTube API Error: HTTP \(httpResponse.statusCode)")
+            if let errorBody = String(data: data, encoding: .utf8) {
+                print("Error body: \(errorBody)")
+            }
+            throw YouTubeExtractorError.networkError(NSError(domain: "YouTubeAPI", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "YouTube API trả về lỗi HTTP \(httpResponse.statusCode)"]))
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {

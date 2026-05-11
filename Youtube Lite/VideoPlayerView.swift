@@ -8,27 +8,23 @@ struct VideoPlayerView: View {
     let audioURL: URL?
     let visitorData: String?
     let title: String
+    
+    @State private var player = AVPlayer()
 
     var body: some View {
-        AVPlayerContainerView(videoURL: videoURL, audioURL: audioURL, visitorData: visitorData)
+        VideoPlayer(player: player)
             .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
             .navigationTitle(title)
+            .onAppear {
+                loadVideo()
+            }
+            .onDisappear {
+                player.pause()
+                player.replaceCurrentItem(with: nil)
+            }
     }
-}
-
-struct AVPlayerContainerView: NSViewRepresentable {
-    let videoURL: URL
-    let audioURL: URL?
-    let visitorData: String?
-
-    func makeNSView(context: Context) -> AVPlayerView {
-        let playerView = AVPlayerView()
-        playerView.controlsStyle = .floating
-        playerView.allowsVideoFrameAnalysis = true
-        
-        let player = AVPlayer()
-        playerView.player = player
-        
+    
+    private func loadVideo() {
         Task {
             let playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL, visitorData: visitorData)
             await MainActor.run {
@@ -36,24 +32,16 @@ struct AVPlayerContainerView: NSViewRepresentable {
                 player.play()
             }
         }
-        
-        return playerView
-    }
-
-    func updateNSView(_ nsView: AVPlayerView, context: Context) {
-    }
-    
-    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
-        nsView.player?.pause()
-        nsView.player = nil
     }
     
     private func createPlayerItem(videoURL: URL, audioURL: URL?, visitorData: String?) async -> AVPlayerItem {
+        // Sử dụng User-Agent chính xác của Android client để tránh 403 Forbidden
+        let userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11)"
+        
         var headers: [String: String] = [
-            "User-Agent": "com.google.android.youtube/19.29.37 (Linux; U; Android 11; en_US; Pixel 5; Build/RQ3A.210605.005)",
+            "User-Agent": userAgent,
             "Origin": "https://www.youtube.com",
-            "Referer": "https://www.youtube.com/",
-            "Range": "bytes=0-"
+            "Referer": "https://www.youtube.com/"
         ]
         
         if let visitorData = visitorData {
@@ -73,23 +61,46 @@ struct AVPlayerContainerView: NSViewRepresentable {
         let audioAsset = AVURLAsset(url: audioURL, options: options)
         
         do {
+            // Load tracks đồng thời để nhanh hơn
+            async let videoTracks = videoAsset.loadTracks(withMediaType: .video)
+            async let audioTracks = audioAsset.loadTracks(withMediaType: .audio)
+            async let videoDuration = videoAsset.load(.duration)
+            async let audioDuration = audioAsset.load(.duration)
+
+            let vTracks = try await videoTracks
+            let aTracks = try await audioTracks
+            let vDur = try await videoDuration
+            let aDur = try await audioDuration
+            
+            let duration = CMTimeMinimum(vDur, aDur)
+            
             // Thêm video track
-            let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first
-            if let videoTrack = videoTrack {
+            if let videoTrack = vTracks.first {
                 let compositionVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
-                try compositionVideoTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: try await videoAsset.load(.duration)), of: videoTrack, at: .zero)
+                try compositionVideoTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: videoTrack, at: .zero)
             }
             
             // Thêm audio track
-            let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first
-            if let audioTrack = audioTrack {
+            if let audioTrack = aTracks.first {
                 let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-                try compositionAudioTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: try await audioAsset.load(.duration)), of: audioTrack, at: .zero)
+                try compositionAudioTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: audioTrack, at: .zero)
             }
             
             return AVPlayerItem(asset: composition)
         } catch {
-            print("Lỗi muxing: \(error)")
+            print("Lỗi muxing: \(error.localizedDescription). Thử phát không headers...")
+            // Fallback 1: Thử lại không có headers (đôi khi YouTube cho phép nếu URL đã có signature)
+            let simpleVideoAsset = AVURLAsset(url: videoURL)
+            do {
+                let vTracks = try await simpleVideoAsset.loadTracks(withMediaType: .video)
+                if !vTracks.isEmpty {
+                    return AVPlayerItem(asset: simpleVideoAsset)
+                }
+            } catch {
+                print("Fallback không headers cũng thất bại: \(error.localizedDescription)")
+            }
+            
+            // Fallback 2: Quay lại video ban đầu (dù lỗi)
             let asset = AVURLAsset(url: videoURL, options: options)
             return AVPlayerItem(asset: asset)
         }
