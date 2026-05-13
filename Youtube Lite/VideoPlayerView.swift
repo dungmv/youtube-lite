@@ -11,7 +11,7 @@ struct VideoPlayerView: View {
     private let playbackManager = PlaybackManager.shared
 
     var body: some View {
-        PlayerView(player: playbackManager.player)
+        playerContainer
             #if os(macOS)
             .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
             #else
@@ -36,7 +36,27 @@ struct VideoPlayerView: View {
                     playbackManager.player.removeTimeObserver(token)
                     timeObserverToken = nil
                 }
+
+                #if os(iOS)
+                AppDelegate.orientationController.setInlinePlayerMode()
+                #endif
             }
+    }
+
+    @ViewBuilder
+    private var playerContainer: some View {
+        #if os(iOS)
+        VStack(spacing: 0) {
+            PlayerView(player: playbackManager.player)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .frame(maxWidth: .infinity, alignment: .top)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        #else
+        PlayerView(player: playbackManager.player)
+        #endif
     }
 
     private func setupPlayer() {
@@ -190,20 +210,45 @@ struct VideoPlayerView: View {
 #if os(iOS)
 struct PlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
+        controller.delegate = context.coordinator
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
         controller.exitsFullScreenWhenPlaybackEnds = false
+        controller.entersFullScreenWhenPlaybackBegins = false
         controller.updatesNowPlayingInfoCenter = false // Quản lý qua PlaybackManager
+        AppDelegate.orientationController.setInlinePlayerMode()
         return controller
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
         uiViewController.player = player
         uiViewController.videoGravity = .resizeAspect
+    }
+
+    final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            willBeginFullScreenPresentationWithAnimationCoordinator coordinator: any UIViewControllerTransitionCoordinator
+        ) {
+            AppDelegate.orientationController.setFullscreenPlayerMode()
+        }
+
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            willEndFullScreenPresentationWithAnimationCoordinator coordinator: any UIViewControllerTransitionCoordinator
+        ) {
+            coordinator.animate(alongsideTransition: nil) { _ in
+                AppDelegate.orientationController.setInlinePlayerMode()
+            }
+        }
     }
 }
 #else
