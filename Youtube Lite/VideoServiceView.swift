@@ -15,13 +15,15 @@ struct VideoServiceView: View {
     @State private var selectedStream: YouTubeStream?
     @State private var showLogin = false
     @StateObject private var authManager = YouTubeAuthManager.shared
+    @State private var selectedVideoID: String?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationTitle("YouTube Link Extractor")
+                .navigationTitle("YouTube")
         } detail: {
-            if let stream = selectedStream, let videoInfo = currentVideoInfo {
+            if let videoID = selectedVideoID, let stream = selectedStream, let videoInfo = currentVideoInfo {
                 VideoPlayerView(
                     videoInfo: videoInfo,
                     selectedStream: Binding(
@@ -29,11 +31,11 @@ struct VideoServiceView: View {
                         set: { selectedStream = $0 }
                     )
                 )
-                .id(videoInfo.videoId)
+                .id(videoID)
             } else {
                 ContentUnavailableView("No Video Selected",
                     systemImage: "play.rectangle",
-                    description: Text("Select a stream from the sidebar to play"))
+                    description: Text("Select a video from the sidebar to play"))
                     .navigationTitle("YouTube Lite")
             }
         }
@@ -91,13 +93,17 @@ struct VideoServiceView: View {
                     .foregroundColor(.red)
                     .padding()
             }
-            List(searchResults) { video in
-                videoRow(video)
-                    .onTapGesture {
-                        selectVideo(video)
-                    }
+            List(searchResults, selection: $selectedVideoID) { video in
+                NavigationLink(value: video.id) {
+                    videoRow(video)
+                }
             }
             .listStyle(.sidebar)
+            .onChange(of: selectedVideoID) { oldID, newID in
+                if let newID = newID, let video = searchResults.first(where: { $0.id == newID }) {
+                    selectVideo(video)
+                }
+            }
         }
     }
 

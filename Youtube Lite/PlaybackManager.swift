@@ -14,30 +14,59 @@ class PlaybackManager: ObservableObject {
     static let shared = PlaybackManager()
     
     private var nowPlayingInfo = [String: Any]()
-    private weak var currentPlayer: AVPlayer?
+    let player = AVPlayer()
+    private var currentVideoID: String?
+    private var currentStreamID: String?
     
     private init() {
+        configureAudioSession()
+        configurePlayer()
         setupRemoteCommandCenter()
         setupBackgroundHandling()
+    }
+
+    private func configureAudioSession() {
+        #if os(iOS) || os(visionOS)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true)
+        } catch {
+            print("⚠️ Audio session config failed: \(error.localizedDescription)")
+        }
+        #endif
+    }
+
+    private func configurePlayer() {
+        #if os(iOS)
+        player.allowsExternalPlayback = true
+        player.preventsDisplaySleepDuringVideoPlayback = true
+        if #available(iOS 15.0, *) {
+            player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+        }
+        #endif
     }
     
     private func setupBackgroundHandling() {
         #if os(iOS)
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-            // Khi app vào nền, iOS có thể tự động pause player có video track.
-            // Ta cần đảm bảo player tiếp tục chạy nếu đang phát.
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 100_000_000) // Đợi 0.1s để hệ thống xử lý xong việc ẩn layer
-                if let player = self?.currentPlayer, player.rate > 0 || player.timeControlStatus == .playing {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                if let player = self?.player, player.rate > 0 || player.timeControlStatus == .playing {
                     player.play()
                 }
             }
         }
         #endif
     }
-    
-    func setPlayer(_ player: AVPlayer) {
-        self.currentPlayer = player
+
+    func shouldReload(videoID: String, streamID: String) -> Bool {
+        currentVideoID != videoID || currentStreamID != streamID
+    }
+
+    func markLoaded(videoID: String, streamID: String) {
+        currentVideoID = videoID
+        currentStreamID = streamID
     }
     
     func setupRemoteCommandCenter() {
@@ -49,20 +78,21 @@ class PlaybackManager: ObservableObject {
         
         commandCenter.playCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
-            self.currentPlayer?.play()
+            self.player.play()
             self.updatePlaybackRate(1.0)
             return .success
         }
         
         commandCenter.pauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
-            self.currentPlayer?.pause()
+            self.player.pause()
             self.updatePlaybackRate(0.0)
             return .success
         }
         
         commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
-            guard let self = self, let player = self.currentPlayer else { return .commandFailed }
+            guard let self = self else { return .commandFailed }
+            let player = self.player
             if player.rate == 0 {
                 player.play()
                 self.updatePlaybackRate(1.0)
