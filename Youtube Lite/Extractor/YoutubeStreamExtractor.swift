@@ -141,7 +141,7 @@ public final class YouTubeStreamExtractor {
         request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         
-        if let cookies = cookies {
+        if let cookies = cookies, !cookies.isEmpty {
             request.setValue(cookies, forHTTPHeaderField: "Cookie")
         }
 
@@ -189,7 +189,7 @@ public final class YouTubeStreamExtractor {
         request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         
-        if let cookies = cookies {
+        if let cookies = cookies, !cookies.isEmpty {
             request.setValue(cookies, forHTTPHeaderField: "Cookie")
         }
 
@@ -204,11 +204,30 @@ public final class YouTubeStreamExtractor {
             throw YouTubeExtractorError.parseError("Không parse được JSON browse response")
         }
 
-        return parseBrowseResponse(json)
+        let videos = parseBrowseResponse(json)
+        
+        // GRACEFUL FALLBACK: Nếu không lấy được video (ví dụ do tài khoản khách chưa đăng nhập bị YouTube chặn feed)
+        // Chúng ta sẽ tự động tìm kiếm các video trending phổ biến để lấp đầy trang chủ!
+        if videos.isEmpty {
+            print("YouTube Parse: Home feed is empty. Triggering trending fallback...")
+            do {
+                return try await search(query: "trending")
+            } catch {
+                print("YouTube Parse: Trending fallback search failed: \(error)")
+                return []
+            }
+        }
+        
+        return videos
     }
 
     /// Lấy thông tin profile của người dùng hiện tại
     public func fetchProfile() async throws -> (displayName: String?, avatarUrl: URL?) {
+        guard let cookies = cookies, !cookies.isEmpty else {
+            print("YouTube Profile: Cookies is nil or empty, skipping guide API fetch.")
+            return (nil, nil)
+        }
+        
         let urlString = "https://www.youtube.com/youtubei/v1/guide?key=\(Self.innertubeAPIKey)"
         guard let url = URL(string: urlString) else {
             throw YouTubeExtractorError.parseError("URL API guide không hợp lệ")
@@ -235,9 +254,7 @@ public final class YouTubeStreamExtractor {
         request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
         request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         
-        if let cookies = cookies {
-            request.setValue(cookies, forHTTPHeaderField: "Cookie")
-        }
+        request.setValue(cookies, forHTTPHeaderField: "Cookie")
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -291,7 +308,7 @@ public final class YouTubeStreamExtractor {
     }
 
     private func parseBrowseResponse(_ json: [String: Any]) -> [YouTubeVideo] {
-        return parseSearchResponse(json) // Dùng chung logic tìm renderer cho browse
+        return extractVideos(from: json)
     }
 
     /// Tìm tất cả các dictionary có key nằm trong danh sách `keys`
@@ -316,67 +333,127 @@ public final class YouTubeStreamExtractor {
     }
 
     private func parseSearchResponse(_ json: [String: Any]) -> [YouTubeVideo] {
-        var videos: [YouTubeVideo] = []
-        
-        // Tìm tất cả videoRenderer, compactVideoRenderer, gridVideoRenderer, richVideoRenderer, playlistVideoRenderer, reelItemRenderer trong toàn bộ JSON
-        let videoRenderers = findAllRenderers(in: json, keys: [
-            "videoRenderer", 
-            "compactVideoRenderer", 
-            "gridVideoRenderer", 
-            "richVideoRenderer", 
-            "playlistVideoRenderer", 
-            "reelItemRenderer"
-        ])
-        print("YouTube Parse: Found \(videoRenderers.count) potential video renderers")
+        return extractVideos(from: json)
+    }
 
-        for renderer in videoRenderers {
-            if let video = parseVideoRenderer(renderer) {
-                videos.append(video)
+    private func extractVideos(from json: Any) -> [YouTubeVideo] {
+        var videos: [YouTubeVideo] = []
+        var seenIDs = Set<String>()
+        
+        func traverse(_ val: Any) {
+            if let dict = val as? [String: Any] {
+                if let video = parseVideoFromDictionary(dict) {
+                    if !seenIDs.contains(video.id) {
+                        videos.append(video)
+                        seenIDs.insert(video.id)
+                    }
+                }
+                
+                for (_, value) in dict {
+                    traverse(value)
+                }
+            } else if let array = val as? [Any] {
+                for item in array {
+                    traverse(item)
+                }
             }
         }
-
+        
+        traverse(json)
         print("YouTube Parse final videos count: \(videos.count)")
         return videos
     }
 
-
-    private func parseVideoRenderer(_ renderer: [String: Any]) -> YouTubeVideo? {
-        // Một số renderer dùng 'videoId' ở top level, số khác lồng trong navigationEndpoint
-        var videoId: String? = renderer["videoId"] as? String
+    private func parseVideoFromDictionary(_ dict: [String: Any]) -> YouTubeVideo? {
+        var videoId: String? = dict["videoId"] as? String
         
         if videoId == nil {
-            let nav = renderer["navigationEndpoint"] as? [String: Any]
-            let watch = (nav?["watchEndpoint"] as? [String: Any]) 
+            let nav = dict["navigationEndpoint"] as? [String: Any]
+                ?? dict["onTap"] as? [String: Any]
+                ?? dict["endpoint"] as? [String: Any]
+                ?? dict["serviceEndpoint"] as? [String: Any]
+                ?? dict["command"] as? [String: Any]
+            
+            let watch = (nav?["watchEndpoint"] as? [String: Any])
                 ?? (nav?["reelWatchEndpoint"] as? [String: Any])
+                ?? (nav?["watchCommand"] as? [String: Any])
+                
             videoId = watch?["videoId"] as? String
         }
         
-        guard let id = videoId else { 
-            return nil 
+        guard let id = videoId, id.count == 11 else {
+            return nil
         }
         
-        let titleText = extractText(from: renderer["title"]) 
-            ?? extractText(from: renderer["headline"])
-            ?? "Unknown Title"
+        var titleText: String? = nil
+        if let titleObj = dict["title"] ?? dict["headline"] ?? dict["titleText"] {
+            titleText = extractText(from: titleObj)
+        }
+        if titleText == nil {
+            titleText = dict["title"] as? String
+                ?? dict["headline"] as? String
+                ?? dict["titleText"] as? String
+        }
         
-        let thumbnails = (renderer["thumbnail"] as? [String: Any])?["thumbnails"] as? [[String: Any]]
-        let thumbnailUrlString = thumbnails?.last?["url"] as? String
-        let thumbnailUrl = thumbnailUrlString.flatMap { URL(string: $0) }
+        // SAFETY GUARD: If there is no title, it's a configuration or non-video element
+        guard let title = titleText, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
         
-        let channelName = extractText(from: renderer["longBylineText"])
-            ?? extractText(from: renderer["shortBylineText"])
-            ?? extractText(from: renderer["ownerText"])
+        var thumbnailUrl: URL? = nil
+        if let thumbnailDict = dict["thumbnail"] as? [String: Any] ?? dict["thumbnails"] as? [String: Any] ?? dict["image"] as? [String: Any] {
+            if let thumbnails = thumbnailDict["thumbnails"] as? [[String: Any]], let urlStr = thumbnails.last?["url"] as? String {
+                thumbnailUrl = URL(string: urlStr)
+            } else if let sources = thumbnailDict["sources"] as? [[String: Any]], let urlStr = sources.last?["url"] as? String {
+                var correctedUrl = urlStr
+                if correctedUrl.hasPrefix("//") {
+                    correctedUrl = "https:" + correctedUrl
+                }
+                thumbnailUrl = URL(string: correctedUrl)
+            }
+        }
+        if thumbnailUrl == nil {
+            if let urlStr = dict["thumbnailUrl"] as? String ?? dict["thumbnail"] as? String {
+                thumbnailUrl = URL(string: urlStr)
+            }
+        }
         
-        let lengthText = extractText(from: renderer["lengthText"])
-        let viewCount = extractText(from: renderer["viewCountText"])
-            ?? extractText(from: renderer["shortViewCountText"])
+        var channelName: String? = nil
+        if let channelObj = dict["longBylineText"] ?? dict["shortBylineText"] ?? dict["ownerText"] ?? dict["author"] ?? dict["channelName"] {
+            channelName = extractText(from: channelObj)
+        }
+        if channelName == nil {
+            channelName = dict["channelName"] as? String
+                ?? dict["author"] as? String
+                ?? dict["ownerText"] as? String
+        }
+        
+        var duration: String? = nil
+        if let lenObj = dict["lengthText"] ?? dict["duration"] ?? dict["durationText"] {
+            duration = extractText(from: lenObj)
+        }
+        if duration == nil {
+            duration = dict["lengthText"] as? String
+                ?? dict["duration"] as? String
+                ?? dict["durationText"] as? String
+        }
+        
+        var viewCount: String? = nil
+        if let viewObj = dict["viewCountText"] ?? dict["shortViewCountText"] ?? dict["viewCount"] {
+            viewCount = extractText(from: viewObj)
+        }
+        if viewCount == nil {
+            viewCount = dict["viewCountText"] as? String
+                ?? dict["shortViewCountText"] as? String
+                ?? dict["viewCount"] as? String
+        }
         
         return YouTubeVideo(
             id: id,
-            title: titleText,
+            title: title,
             thumbnailUrl: thumbnailUrl,
             channelName: channelName,
-            duration: lengthText,
+            duration: duration,
             viewCount: viewCount
         )
     }
@@ -387,6 +464,10 @@ public final class YouTubeStreamExtractor {
         
         if let simpleText = dict["simpleText"] as? String {
             return simpleText
+        }
+        
+        if let content = dict["content"] as? String {
+            return content
         }
         
         if let runs = dict["runs"] as? [[String: Any]] {
@@ -475,7 +556,7 @@ public final class YouTubeStreamExtractor {
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
         request.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
         
-        if let cookies = cookies {
+        if let cookies = cookies, !cookies.isEmpty {
             request.setValue(cookies, forHTTPHeaderField: "Cookie")
         }
 
