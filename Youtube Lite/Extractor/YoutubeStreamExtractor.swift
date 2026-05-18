@@ -5,83 +5,6 @@
 
 import Foundation
 
-// MARK: - Models
-
-public struct YouTubeStream: Identifiable, Hashable {
-    public var id: String { "\(itag)-\(isAdaptive)-\(url.absoluteString.hashValue)" }
-    public let itag: Int
-    public let url: URL
-    public let mimeType: String
-    public let quality: String
-    public let width: Int?
-    public let height: Int?
-    public let bitrate: Int?
-    public let audioSampleRate: String?
-    public let isAdaptive: Bool  // true = chỉ video hoặc chỉ audio (adaptive), false = muxed (cả hai)
-
-    public var isVideoOnly: Bool { isAdaptive && audioSampleRate == nil }
-    public var isAudioOnly: Bool { isAdaptive && audioSampleRate != nil && (width == nil || width == 0) }
-}
-
-public struct YouTubeVideoInfo {
-    public let videoId: String
-    public let title: String
-    public let duration: Int?         // giây
-    public let visitorData: String?             // Token cho playback
-    public let thumbnailUrl: URL?               // Hình nền video
-    public let muxedStreams: [YouTubeStream]    // video + audio trong 1 file (dễ play nhất)
-    public let videoStreams: [YouTubeStream]    // chỉ video (adaptive)
-    public let audioStreams: [YouTubeStream]    // chỉ audio (adaptive)
-
-    /// Stream muxed chất lượng cao nhất (không cần ghép audio riêng)
-    public var bestMuxedStream: YouTubeStream? {
-        muxedStreams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
-    }
-
-    /// Stream video adaptive chất lượng cao nhất (ưu tiên mp4)
-    public var bestVideoStream: YouTubeStream? {
-        let mp4Streams = videoStreams.filter { $0.mimeType.contains("video/mp4") }
-        if !mp4Streams.isEmpty {
-            return mp4Streams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
-        }
-        return videoStreams.max(by: { ($0.height ?? 0) < ($1.height ?? 0) })
-    }
-
-    /// Stream audio adaptive bitrate cao nhất (ưu tiên mp4/m4a)
-    public var bestAudioStream: YouTubeStream? {
-        let mp4Streams = audioStreams.filter { $0.mimeType.contains("audio/mp4") || $0.mimeType.contains("audio/m4a") }
-        if !mp4Streams.isEmpty {
-            return mp4Streams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) })
-        }
-        return audioStreams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) })
-    }
-}
-
-public struct YouTubeVideo: Identifiable, Hashable {
-    public let id: String
-    public let title: String
-    public let thumbnailUrl: URL?
-    public let channelName: String?
-    public let duration: String?
-    public let viewCount: String?
-}
-
-public enum YouTubeExtractorError: Error, LocalizedError {
-    case invalidVideoID
-    case networkError(Error)
-    case parseError(String)
-    case videoUnavailable(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .invalidVideoID: return "Video ID không hợp lệ"
-        case .networkError(let e): return "Lỗi mạng: \(e.localizedDescription)"
-        case .parseError(let msg): return "Lỗi parse: \(msg)"
-        case .videoUnavailable(let reason): return "Video không khả dụng: \(reason)"
-        }
-    }
-}
-
 // MARK: - Extractor
 
 public final class YouTubeStreamExtractor {
@@ -721,19 +644,5 @@ public final class YouTubeStreamExtractor {
             audioSampleRate: audioSampleRate,
             isAdaptive: isAdaptive
         )
-    }
-}
-
-// MARK: - String Regex Helper
-
-private extension String {
-    func firstMatch(pattern: String, group: Int) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: self, range: NSRange(self.startIndex..., in: self)),
-              match.numberOfRanges > group else { return nil }
-        let range = match.range(at: group)
-        guard range.location != NSNotFound,
-              let swiftRange = Range(range, in: self) else { return nil }
-        return String(self[swiftRange])
     }
 }

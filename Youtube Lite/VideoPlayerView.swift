@@ -19,6 +19,8 @@ class VideoPlayerViewModel: ObservableObject {
     
     let playbackManager = PlaybackManager.shared
     private var timeObserverToken: Any?
+    private var sourceAssets: [AVURLAsset] = []
+    private var playerItemObserver: NSKeyValueObservation?
     
     init(videoInfo: YouTubeVideoInfo, selectedStream: YouTubeStream) {
         self.videoInfo = videoInfo
@@ -31,6 +33,9 @@ class VideoPlayerViewModel: ObservableObject {
     }
     
     func onDisappear() {
+        playerItemObserver?.invalidate()
+        playerItemObserver = nil
+        
         if let token = timeObserverToken {
             playbackManager.player.removeTimeObserver(token)
             timeObserverToken = nil
@@ -48,7 +53,9 @@ class VideoPlayerViewModel: ObservableObject {
                 queue: .main
             ) { [weak self] time in
                 guard let self = self else { return }
-                self.updateNowPlaying(currentTime: time.seconds)
+                Task { @MainActor in
+                    self.updateNowPlaying(currentTime: time.seconds)
+                }
             }
         }
     }
@@ -68,6 +75,7 @@ class VideoPlayerViewModel: ObservableObject {
     func loadVideo() {
         isLoading = true
         errorMessage = nil
+        sourceAssets.removeAll()
         
         Task {
             let stream = selectedStream
@@ -93,6 +101,7 @@ class VideoPlayerViewModel: ObservableObject {
             }
 
             playbackManager.player.replaceCurrentItem(with: playerItem)
+            self.observePlayerItem(playerItem)
             playbackManager.markLoaded(videoID: videoInfo.videoId, streamID: stream.id)
             playbackManager.player.play()
             updateNowPlaying()
@@ -102,9 +111,7 @@ class VideoPlayerViewModel: ObservableObject {
 
     private func makeHTTPHeaders(visitorData: String?) -> [String: String] {
         var headers: [String: String] = [
-            "User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 11)",
-            "Origin": "https://www.youtube.com",
-            "Referer": "https://www.youtube.com/"
+            "User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 11)"
         ]
 
         if let visitorData = visitorData {
@@ -116,27 +123,28 @@ class VideoPlayerViewModel: ObservableObject {
     
     private func createPlayerItem(videoURL: URL, audioURL: URL?, visitorData: String?) async -> AVPlayerItem {
         let headers = makeHTTPHeaders(visitorData: visitorData)
-        let options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
+        
+        var options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
+        if let userAgent = headers["User-Agent"] {
+            options[AVURLAssetHTTPUserAgentKey] = userAgent
+        }
+
+        let videoAsset = AVURLAsset(url: videoURL, options: options)
+        self.sourceAssets.append(videoAsset)
 
         guard let audioURL = audioURL else {
-            let asset = AVURLAsset(url: videoURL, options: options)
-            return AVPlayerItem(asset: asset)
+            return AVPlayerItem(asset: videoAsset)
         }
         
-        let composition = AVMutableComposition()
-        let videoAsset = AVURLAsset(url: videoURL, options: options)
         let audioAsset = AVURLAsset(url: audioURL, options: options)
+        self.sourceAssets.append(audioAsset)
+        
+        let composition = AVMutableComposition()
         
         do {
-            async let videoTracks = videoAsset.loadTracks(withMediaType: .video)
-            async let audioTracks = audioAsset.loadTracks(withMediaType: .audio)
-            async let videoDuration = videoAsset.load(.duration)
-            async let audioDuration = audioAsset.load(.duration)
-
-            let vTracks = try await videoTracks
-            let aTracks = try await audioTracks
-            let vDur = try await videoDuration
-            let aDur = try await audioDuration
+            // Tải thông tin tracks và duration tuần tự để tránh gửi quá nhiều kết nối TCP đồng thời làm máy chủ YouTube từ chối (TCP Reset)
+            let (vTracks, vDur) = try await videoAsset.load(.tracks, .duration)
+            let (aTracks, aDur) = try await audioAsset.load(.tracks, .duration)
 
             let metadataDuration: CMTime? = {
                 guard let seconds = videoInfo.duration, seconds > 0 else { return nil }
@@ -158,8 +166,9 @@ class VideoPlayerViewModel: ObservableObject {
         } catch {
             print("Lỗi muxing: \(error.localizedDescription). Thử phát không headers...")
             let simpleVideoAsset = AVURLAsset(url: videoURL)
+            self.sourceAssets.append(simpleVideoAsset)
             do {
-                let vTracks = try await simpleVideoAsset.loadTracks(withMediaType: .video)
+                let (vTracks, _) = try await simpleVideoAsset.load(.tracks, .duration)
                 if !vTracks.isEmpty {
                     return AVPlayerItem(asset: simpleVideoAsset)
                 }
@@ -168,7 +177,39 @@ class VideoPlayerViewModel: ObservableObject {
             }
             
             let asset = AVURLAsset(url: videoURL, options: options)
+            self.sourceAssets.append(asset)
             return AVPlayerItem(asset: asset)
+        }
+    }
+    
+    private func observePlayerItem(_ item: AVPlayerItem) {
+        playerItemObserver?.invalidate()
+        playerItemObserver = item.observe(\.status, options: [.new, .old]) { [weak self] item, change in
+            guard let self = self else { return }
+            Task { @MainActor in
+                if item.status == .failed {
+                    print("⚠️ AVPlayerItem failed: \(String(describing: item.error?.localizedDescription))")
+                    self.handlePlaybackFailure(error: item.error)
+                }
+            }
+        }
+    }
+    
+    private func handlePlaybackFailure(error: Error?) {
+        if selectedStream.isAdaptive {
+            print("🔄 Luồng thích ứng bị lỗi, tự động chuyển về chất lượng 360p (Muxed)...")
+            self.errorMessage = "Chất lượng \(selectedStream.quality) bị lỗi kết nối từ YouTube. Đang tự động chuyển về 360p..."
+            
+            if let fallbackStream = videoInfo.bestMuxedStream {
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    self.selectedStream = fallbackStream
+                }
+            } else {
+                self.errorMessage = "Không thể phát video này: \(error?.localizedDescription ?? "Lỗi không xác định")"
+            }
+        } else {
+            self.errorMessage = "Không thể phát video: \(error?.localizedDescription ?? "Lỗi kết nối từ YouTube CDN")"
         }
     }
 }
@@ -207,6 +248,20 @@ struct MacVideoPlayerView: View {
                 ProgressView()
                     .controlSize(.large)
                     .transition(.opacity)
+            }
+            
+            if let error = viewModel.errorMessage {
+                VStack {
+                    Spacer()
+                    Text(error)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.75))
+                        .cornerRadius(10)
+                        .padding(.bottom, 20)
+                }
+                .transition(.slide)
             }
         }
         .frame(minWidth: 640, idealWidth: 960, minHeight: 360, idealHeight: 540)
@@ -289,6 +344,21 @@ struct iOSVideoPlayerView: View {
                 if viewModel.isLoading {
                     ProgressView()
                         .transition(.opacity)
+                }
+                
+                if let error = viewModel.errorMessage {
+                    VStack {
+                        Spacer()
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.75))
+                            .cornerRadius(8)
+                            .padding(.bottom, 12)
+                    }
+                    .transition(.slide)
                 }
             }
             
