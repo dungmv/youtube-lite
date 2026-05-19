@@ -4,6 +4,10 @@ import AVFoundation
 import CoreMedia
 import Combine
 
+#if os(iOS)
+import UIKit
+#endif
+
 // MARK: - Video Player ViewModel (MVVM)
 @MainActor
 class VideoPlayerViewModel: ObservableObject {
@@ -21,6 +25,16 @@ class VideoPlayerViewModel: ObservableObject {
     private var timeObserverToken: Any?
     private var sourceAssets: [AVURLAsset] = []
     private var playerItemObserver: NSKeyValueObservation?
+    private var pendingSeekTime: Double?
+    private var pendingResumeRate: Float?
+    private var failedAudioStreamIDs = Set<String>()
+    #if os(iOS)
+    private var backgroundObserver: NSObjectProtocol?
+    private var foregroundObserver: NSObjectProtocol?
+    private var foregroundPreferredStream: YouTubeStream?
+    private var isSwitchingForBackgroundPlayback = false
+    private var isBackgroundPlaybackMode = false
+    #endif
     
     init(videoInfo: YouTubeVideoInfo, selectedStream: YouTubeStream) {
         self.videoInfo = videoInfo
@@ -29,6 +43,9 @@ class VideoPlayerViewModel: ObservableObject {
     
     func onAppear() {
         setupPlayer()
+        #if os(iOS)
+        setupLifecycleObservers()
+        #endif
         loadVideo()
     }
     
@@ -40,6 +57,23 @@ class VideoPlayerViewModel: ObservableObject {
             playbackManager.player.removeTimeObserver(token)
             timeObserverToken = nil
         }
+
+        #if os(iOS)
+        if let backgroundObserver {
+            NotificationCenter.default.removeObserver(backgroundObserver)
+            self.backgroundObserver = nil
+        }
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+            self.foregroundObserver = nil
+        }
+        foregroundPreferredStream = nil
+        isSwitchingForBackgroundPlayback = false
+        isBackgroundPlaybackMode = false
+        #endif
+
+        pendingSeekTime = nil
+        pendingResumeRate = nil
         
         #if os(iOS)
         AppDelegate.orientationController.setInlinePlayerMode()
@@ -71,6 +105,78 @@ class VideoPlayerViewModel: ObservableObject {
             thumbnail: videoInfo.thumbnailUrl
         )
     }
+
+    #if os(iOS)
+    private func setupLifecycleObservers() {
+        if backgroundObserver == nil {
+            backgroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.optimizeForBackgroundPlayback()
+                }
+            }
+        }
+
+        if foregroundObserver == nil {
+            foregroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.restoreForegroundPlaybackIfNeeded()
+                }
+            }
+        }
+    }
+
+    private func optimizeForBackgroundPlayback() {
+        guard
+            !isSwitchingForBackgroundPlayback,
+            !selectedStream.isAudioOnly,
+            let audioStream = videoInfo.preferredAudioStream
+        else {
+            playbackManager.activateAudioSession()
+            if playbackManager.player.timeControlStatus == .playing || playbackManager.player.rate > 0 {
+                playbackManager.player.play()
+            }
+            return
+        }
+
+        foregroundPreferredStream = selectedStream
+        let currentTime = playbackManager.player.currentTime().seconds
+        pendingSeekTime = currentTime.isFinite && currentTime > 0 ? currentTime : nil
+        pendingResumeRate = playbackManager.player.rate > 0 ? playbackManager.player.rate : 1.0
+        isSwitchingForBackgroundPlayback = true
+        isBackgroundPlaybackMode = true
+        selectedStream = audioStream
+    }
+
+    private func restoreForegroundPlaybackIfNeeded() {
+        guard
+            isSwitchingForBackgroundPlayback,
+            let preferredStream = foregroundPreferredStream
+        else {
+            return
+        }
+
+        let currentTime = playbackManager.player.currentTime().seconds
+        pendingSeekTime = currentTime.isFinite && currentTime > 0 ? currentTime : pendingSeekTime
+        pendingResumeRate = playbackManager.player.rate
+        isSwitchingForBackgroundPlayback = false
+        isBackgroundPlaybackMode = false
+        foregroundPreferredStream = nil
+
+        if preferredStream.id != selectedStream.id {
+            selectedStream = preferredStream
+        }
+    }
+    #endif
     
     func loadVideo() {
         isLoading = true
@@ -80,7 +186,19 @@ class VideoPlayerViewModel: ObservableObject {
         Task {
             let stream = selectedStream
             if !playbackManager.shouldReload(videoID: videoInfo.videoId, streamID: stream.id) {
+                if let seekTime = self.pendingSeekTime, seekTime.isFinite, seekTime > 0 {
+                    let target = CMTime(seconds: seekTime, preferredTimescale: 600)
+                    await playbackManager.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+                self.pendingSeekTime = nil
+                let shouldResume = (self.pendingResumeRate ?? 1.0) > 0
+                self.pendingResumeRate = nil
                 if playbackManager.player.timeControlStatus != .playing {
+                    playbackManager.activateAudioSession()
+                    if shouldResume {
+                        playbackManager.player.play()
+                    }
+                } else if shouldResume {
                     playbackManager.player.play()
                 }
                 updateNowPlaying()
@@ -89,12 +207,13 @@ class VideoPlayerViewModel: ObservableObject {
             }
 
             let videoURL: URL = stream.isVideoOnly ? stream.url : (stream.isAudioOnly ? (videoInfo.bestVideoStream?.url ?? stream.url) : stream.url)
-            let audioURL: URL? = stream.isVideoOnly ? videoInfo.bestAudioStream?.url : (stream.isAudioOnly ? stream.url : nil)
+            let audioURL: URL? = stream.isVideoOnly ? videoInfo.preferredAudioStream?.url : (stream.isAudioOnly ? stream.url : nil)
+            print("▶️ Loading stream itag=\(stream.itag) quality=\(stream.quality) mime=\(stream.mimeType) audioOnly=\(stream.isAudioOnly) videoOnly=\(stream.isVideoOnly)")
 
             let playerItem: AVPlayerItem
             if stream.isAudioOnly {
-                let headers = makeHTTPHeaders(visitorData: videoInfo.visitorData)
-                let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+                let asset = AVURLAsset(url: stream.url, options: makeAssetOptions(visitorData: videoInfo.visitorData))
+                self.sourceAssets.append(asset)
                 playerItem = AVPlayerItem(asset: asset)
             } else {
                 playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL, visitorData: videoInfo.visitorData)
@@ -102,8 +221,18 @@ class VideoPlayerViewModel: ObservableObject {
 
             playbackManager.player.replaceCurrentItem(with: playerItem)
             self.observePlayerItem(playerItem)
-            playbackManager.markLoaded(videoID: videoInfo.videoId, streamID: stream.id)
-            playbackManager.player.play()
+            let seekTime = self.pendingSeekTime
+            let shouldResume = (self.pendingResumeRate ?? 1.0) > 0
+            self.pendingSeekTime = nil
+            self.pendingResumeRate = nil
+            self.playbackManager.activateAudioSession()
+            if let seekTime, seekTime.isFinite, seekTime > 0 {
+                let target = CMTime(seconds: seekTime, preferredTimescale: 600)
+                await self.playbackManager.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+            if shouldResume {
+                playbackManager.player.play()
+            }
             updateNowPlaying()
             self.isLoading = false
         }
@@ -111,7 +240,11 @@ class VideoPlayerViewModel: ObservableObject {
 
     private func makeHTTPHeaders(visitorData: String?) -> [String: String] {
         var headers: [String: String] = [
-            "User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 11)"
+            "User-Agent": "com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US; Pixel 8 Pro Build/UD1A.231105.004) gzip",
+            "Origin": "https://www.youtube.com",
+            "Referer": "https://www.youtube.com/watch?v=\(videoInfo.videoId)",
+            "X-YouTube-Client-Name": "3",
+            "X-YouTube-Client-Version": "20.10.38"
         ]
 
         if let visitorData = visitorData {
@@ -120,14 +253,20 @@ class VideoPlayerViewModel: ObservableObject {
 
         return headers
     }
-    
-    private func createPlayerItem(videoURL: URL, audioURL: URL?, visitorData: String?) async -> AVPlayerItem {
+
+    private func makeAssetOptions(visitorData: String?) -> [String: Any] {
         let headers = makeHTTPHeaders(visitorData: visitorData)
-        
-        var options: [String: Any] = ["AVURLAssetHTTPHeaderFieldsKey": headers]
+        var options: [String: Any] = [
+            "AVURLAssetHTTPHeaderFieldsKey": headers
+        ]
         if let userAgent = headers["User-Agent"] {
             options[AVURLAssetHTTPUserAgentKey] = userAgent
         }
+        return options
+    }
+
+    private func createPlayerItem(videoURL: URL, audioURL: URL?, visitorData: String?) async -> AVPlayerItem {
+        let options = makeAssetOptions(visitorData: visitorData)
 
         let videoAsset = AVURLAsset(url: videoURL, options: options)
         self.sourceAssets.append(videoAsset)
@@ -187,7 +326,12 @@ class VideoPlayerViewModel: ObservableObject {
         playerItemObserver = item.observe(\.status, options: [.new, .old]) { [weak self] item, change in
             guard let self = self else { return }
             Task { @MainActor in
-                if item.status == .failed {
+                if item.status == .readyToPlay {
+                    self.playbackManager.markLoaded(videoID: self.videoInfo.videoId, streamID: self.selectedStream.id)
+                    if !self.selectedStream.isAudioOnly {
+                        self.failedAudioStreamIDs.removeAll()
+                    }
+                } else if item.status == .failed {
                     print("⚠️ AVPlayerItem failed: \(String(describing: item.error?.localizedDescription))")
                     self.handlePlaybackFailure(error: item.error)
                 }
@@ -196,21 +340,55 @@ class VideoPlayerViewModel: ObservableObject {
     }
     
     private func handlePlaybackFailure(error: Error?) {
-        if selectedStream.isAdaptive {
-            print("🔄 Luồng thích ứng bị lỗi, tự động chuyển về chất lượng 360p (Muxed)...")
-            self.errorMessage = "Chất lượng \(selectedStream.quality) bị lỗi kết nối từ YouTube. Đang tự động chuyển về 360p..."
-            
-            if let fallbackStream = videoInfo.bestMuxedStream {
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    self.selectedStream = fallbackStream
-                }
-            } else {
-                self.errorMessage = "Không thể phát video này: \(error?.localizedDescription ?? "Lỗi không xác định")"
+        playbackManager.resetLoaded()
+
+        if selectedStream.isAudioOnly {
+            failedAudioStreamIDs.insert(selectedStream.id)
+            if let fallbackStream = nextDirectAudioFallback(excluding: failedAudioStreamIDs) {
+                print("🔁 Audio stream itag \(selectedStream.itag) failed; retrying direct audio stream itag \(fallbackStream.itag)")
+                let currentTime = playbackManager.player.currentTime().seconds
+                pendingSeekTime = currentTime.isFinite && currentTime > 0 ? currentTime : pendingSeekTime
+                pendingResumeRate = 1.0
+                selectedStream = fallbackStream
+                return
             }
-        } else {
-            self.errorMessage = "Không thể phát video: \(error?.localizedDescription ?? "Lỗi kết nối từ YouTube CDN")"
         }
+
+        let streamKind: String
+        if selectedStream.isAudioOnly {
+            streamKind = "audio"
+        } else if selectedStream.isVideoOnly {
+            streamKind = "video adaptive"
+        } else {
+            streamKind = "muxed"
+        }
+
+        self.errorMessage = "Không thể phát stream \(streamKind) itag \(selectedStream.itag): \(error?.localizedDescription ?? "Lỗi kết nối từ YouTube CDN")"
+    }
+
+    private func nextDirectAudioFallback(excluding failedIDs: Set<String>) -> YouTubeStream? {
+        let mp4Streams = videoInfo.audioStreams.filter {
+            let mime = $0.mimeType.lowercased()
+            return mime.contains("audio/mp4") || mime.contains("audio/m4a")
+        }
+        let candidates = (!mp4Streams.isEmpty ? mp4Streams : videoInfo.audioStreams)
+            .filter { !failedIDs.contains($0.id) }
+
+        let preferredItags = [140, 139, 141]
+        for itag in preferredItags {
+            if let stream = candidates.first(where: { $0.itag == itag }) {
+                return stream
+            }
+        }
+
+        return candidates.sorted {
+            let lhs = $0.bitrate ?? 0
+            let rhs = $1.bitrate ?? 0
+            if lhs == rhs {
+                return ($0.audioSampleRate ?? "") > ($1.audioSampleRate ?? "")
+            }
+            return lhs > rhs
+        }.first
     }
 }
 

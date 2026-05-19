@@ -17,6 +17,9 @@ class PlaybackManager: ObservableObject {
     let player = AVPlayer()
     private var currentVideoID: String?
     private var currentStreamID: String?
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    private var audioSessionConfigured = false
     
     private init() {
         configureAudioSession()
@@ -29,10 +32,25 @@ class PlaybackManager: ObservableObject {
         #if os(iOS) || os(visionOS)
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setCategory(.playback, mode: .default, options: [])
+            audioSessionConfigured = true
+        } catch {
+            print("⚠️ Audio session category failed: \(error.localizedDescription)")
+        }
+        #endif
+    }
+
+    func activateAudioSession() {
+        #if os(iOS) || os(visionOS)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            if !audioSessionConfigured {
+                try session.setCategory(.playback, mode: .default, options: [])
+                audioSessionConfigured = true
+            }
             try session.setActive(true)
         } catch {
-            print("⚠️ Audio session config failed: \(error.localizedDescription)")
+            print("⚠️ Audio session activation failed: \(error.localizedDescription)")
         }
         #endif
     }
@@ -40,7 +58,9 @@ class PlaybackManager: ObservableObject {
     private func configurePlayer() {
         #if os(iOS)
         player.allowsExternalPlayback = true
+        player.usesExternalPlaybackWhileExternalScreenIsActive = true
         player.preventsDisplaySleepDuringVideoPlayback = true
+        player.automaticallyWaitsToMinimizeStalling = true
         if #available(iOS 15.0, *) {
             player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         }
@@ -49,12 +69,64 @@ class PlaybackManager: ObservableObject {
     
     private func setupBackgroundHandling() {
         #if os(iOS)
+        UIApplication.shared.beginReceivingRemoteControlEvents()
+
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 if let player = self?.player, player.rate > 0 || player.timeControlStatus == .playing {
+                    self?.activateAudioSession()
                     player.play()
                 }
+            }
+        }
+
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            guard
+                let self,
+                let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+            else {
+                return
+            }
+
+            switch type {
+            case .began:
+                self.updatePlaybackRate(0.0)
+            case .ended:
+                self.activateAudioSession()
+                let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    self.player.play()
+                    self.updatePlaybackRate(1.0)
+                }
+            @unknown default:
+                break
+            }
+        }
+
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            guard
+                let self,
+                let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+            else {
+                return
+            }
+
+            if reason == .oldDeviceUnavailable,
+               self.player.timeControlStatus == .playing || self.player.rate > 0 {
+                self.activateAudioSession()
+                self.player.play()
             }
         }
         #endif
@@ -68,6 +140,11 @@ class PlaybackManager: ObservableObject {
         currentVideoID = videoID
         currentStreamID = streamID
     }
+
+    func resetLoaded() {
+        currentVideoID = nil
+        currentStreamID = nil
+    }
     
     func setupRemoteCommandCenter() {
         let commandCenter = MPRemoteCommandCenter.shared()
@@ -78,6 +155,7 @@ class PlaybackManager: ObservableObject {
         
         commandCenter.playCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
+            self.activateAudioSession()
             self.player.play()
             self.updatePlaybackRate(1.0)
             return .success
@@ -94,6 +172,7 @@ class PlaybackManager: ObservableObject {
             guard let self = self else { return .commandFailed }
             let player = self.player
             if player.rate == 0 {
+                self.activateAudioSession()
                 player.play()
                 self.updatePlaybackRate(1.0)
             } else {

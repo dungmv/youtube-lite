@@ -17,6 +17,66 @@ public final class YouTubeStreamExtractor {
     private static let innertubeClientVersion = "20.10.38"
     private static let innertubeClientNameID = 3
     private static let userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 11)"
+    private static let webUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+
+    private struct InnerTubeClient {
+        let name: String
+        let apiKey: String?
+        let clientName: String
+        let clientVersion: String
+        let clientNameID: Int
+        let userAgent: String
+        let extraContext: [String: Any]
+        let allowsContentCheck: Bool
+    }
+
+    private struct WatchPageData {
+        let apiKey: String
+        let clientVersion: String
+        let visitorData: String?
+    }
+
+    private static let playbackClients: [InnerTubeClient] = [
+        InnerTubeClient(
+            name: "Android",
+            apiKey: innertubeAPIKey,
+            clientName: "ANDROID",
+            clientVersion: "20.10.38",
+            clientNameID: 3,
+            userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US; Pixel 8 Pro Build/UD1A.231105.004) gzip",
+            extraContext: [
+                "androidSdkVersion": 34,
+                "osName": "Android",
+                "osVersion": "14"
+            ],
+            allowsContentCheck: true
+        ),
+        InnerTubeClient(
+            name: "Web",
+            apiKey: nil,
+            clientName: "WEB",
+            clientVersion: "2.20250326.00.00",
+            clientNameID: 1,
+            userAgent: webUserAgent,
+            extraContext: [:],
+            allowsContentCheck: false
+        ),
+        InnerTubeClient(
+            name: "iOS",
+            apiKey: "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
+            clientName: "IOS",
+            clientVersion: "20.10.4",
+            clientNameID: 5,
+            userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X)",
+            extraContext: [
+                "deviceMake": "Apple",
+                "deviceModel": "iPhone16,2",
+                "osName": "iOS",
+                "osVersion": "18.3.2"
+            ],
+            allowsContentCheck: true
+        )
+    ]
 
     private let session: URLSession
     private let cookies: String?
@@ -439,45 +499,118 @@ public final class YouTubeStreamExtractor {
     /// Nguồn: youtube.py - _extract_player_response(), _call_api()
     /// API này trả về JSON chứa toàn bộ thông tin stream
     private func fetchPlayerResponse(videoID: String) async throws -> [String: Any] {
-        let urlString = "https://www.youtube.com/youtubei/v1/player?key=\(Self.innertubeAPIKey)"
+        let pageData = try? await scrapeWatchPage(videoID: videoID)
+        var lastError: Error?
+
+        for client in Self.playbackClients {
+            if client.apiKey == nil, pageData?.apiKey == nil {
+                print("YouTube Player: Skipping \(client.name) client because watch page data is unavailable")
+                continue
+            }
+
+            do {
+                print("YouTube Player: Trying \(client.name) client for \(videoID)")
+                return try await fetchPlayerResponse(videoID: videoID, client: client, pageData: pageData)
+            } catch {
+                lastError = error
+                print("YouTube Player: \(client.name) client failed: \(error.localizedDescription)")
+                if !shouldTryNextPlaybackClient(after: error) {
+                    throw error
+                }
+            }
+        }
+
+        throw lastError ?? YouTubeExtractorError.parseError("Không lấy được player response từ YouTube")
+    }
+
+    private func scrapeWatchPage(videoID: String) async throws -> WatchPageData {
+        guard let url = URL(string: "https://www.youtube.com/watch?v=\(videoID)") else {
+            throw YouTubeExtractorError.parseError("URL watch page không hợp lệ")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        if let cookies = cookies, !cookies.isEmpty {
+            request.setValue(cookies, forHTTPHeaderField: "Cookie")
+        }
+
+        let (data, _) = try await session.data(for: request)
+        var html = String(data: data, encoding: .utf8) ?? ""
+
+        if html.contains("action=\"https://consent.youtube.com/s\""),
+           let consentValue = html.firstMatch(pattern: #"name="v" value="([^"]+)""#, group: 1) {
+            var consentRequest = URLRequest(url: url)
+            consentRequest.httpMethod = "GET"
+            consentRequest.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+            consentRequest.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+            consentRequest.setValue("CONSENT=YES+\(consentValue)", forHTTPHeaderField: "Cookie")
+            if let cookies = cookies, !cookies.isEmpty {
+                consentRequest.setValue("\(cookies); CONSENT=YES+\(consentValue)", forHTTPHeaderField: "Cookie")
+            }
+            let (consentData, _) = try await session.data(for: consentRequest)
+            html = String(data: consentData, encoding: .utf8) ?? html
+        }
+
+        guard let apiKey = html.firstMatch(pattern: #""INNERTUBE_API_KEY"\s*:\s*"([^"]+)""#, group: 1) else {
+            throw YouTubeExtractorError.parseError("Không tìm thấy INNERTUBE_API_KEY trong watch page")
+        }
+
+        let clientVersion = html.firstMatch(pattern: #""INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)""#, group: 1) ?? "2.20250326.00.00"
+        let visitorData = html.firstMatch(pattern: #""VISITOR_DATA"\s*:\s*"([^"]+)""#, group: 1)
+        return WatchPageData(apiKey: apiKey, clientVersion: clientVersion, visitorData: visitorData)
+    }
+
+    private func fetchPlayerResponse(videoID: String, client: InnerTubeClient, pageData: WatchPageData?) async throws -> [String: Any] {
+        let apiKey = client.apiKey ?? pageData?.apiKey ?? Self.innertubeAPIKey
+        let urlString = "https://www.youtube.com/youtubei/v1/player?key=\(apiKey)"
         guard let url = URL(string: urlString) else {
             throw YouTubeExtractorError.parseError("URL API không hợp lệ")
         }
 
-        // Body request giả lập Android YouTube app
-        // Nguồn: youtube.py - _INNERTUBE_CLIENTS['android_sdkless']['INNERTUBE_CONTEXT']
-        let body: [String: Any] = [
+        let clientVersion = client.clientName == "WEB" ? (pageData?.clientVersion ?? client.clientVersion) : client.clientVersion
+        var clientContext: [String: Any] = [
+            "clientName": client.clientName,
+            "clientVersion": clientVersion,
+            "userAgent": client.userAgent,
+            "hl": "en",
+            "gl": "US",
+        ]
+        for (key, value) in client.extraContext {
+            clientContext[key] = value
+        }
+        if let visitorData = pageData?.visitorData {
+            clientContext["visitorData"] = visitorData
+        }
+
+        var body: [String: Any] = [
             "videoId": videoID,
             "context": [
-                "client": [
-                    "clientName": Self.innertubeClientName,
-                    "clientVersion": Self.innertubeClientVersion,
-                    "androidSdkVersion": 30,
-                    "osName": "Android",
-                    "osVersion": "11",
-                    "hl": "en",
-                    "gl": "US",
-                ],
+                "client": clientContext,
             ],
             "playbackContext": [
                 "contentPlaybackContext": [
                     "html5Preference": "HTML5_PREF_WANTS",
                 ],
             ],
-            "contentCheckOk": true,
-            "racyCheckOk": true,
         ]
+        if client.allowsContentCheck {
+            body["contentCheckOk"] = true
+            body["racyCheckOk"] = true
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        // Header giả lập client Android
-        // Nguồn: youtube.py - _INNERTUBE_CONTEXT_CLIENT_NAME header
-        request.setValue(String(Self.innertubeClientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
-        request.setValue(Self.innertubeClientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(String(client.clientNameID), forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         request.setValue("https://www.youtube.com", forHTTPHeaderField: "Origin")
-        request.setValue("https://www.youtube.com/", forHTTPHeaderField: "Referer")
+        request.setValue("https://www.youtube.com/watch?v=\(videoID)", forHTTPHeaderField: "Referer")
+        if let visitorData = pageData?.visitorData {
+            request.setValue(visitorData, forHTTPHeaderField: "X-Goog-Visitor-Id")
+        }
         
         if let cookies = cookies, !cookies.isEmpty {
             request.setValue(cookies, forHTTPHeaderField: "Cookie")
@@ -504,6 +637,13 @@ public final class YouTubeStreamExtractor {
         }
 
         return json
+    }
+
+    private func shouldTryNextPlaybackClient(after error: Error) -> Bool {
+        if case YouTubeExtractorError.videoUnavailable = error {
+            return false
+        }
+        return true
     }
 
     // MARK: - Step 3: Parse Player Response → Stream URLs
@@ -553,6 +693,13 @@ public final class YouTubeStreamExtractor {
         // Lấy streamingData
         guard let streamingData = response["streamingData"] as? [String: Any] else {
             throw YouTubeExtractorError.parseError("Không tìm thấy streamingData")
+        }
+
+        if let hlsManifestURL = streamingData["hlsManifestUrl"] as? String {
+            print("YouTube HLS Manifest: \(hlsManifestURL)")
+        }
+        if let dashManifestURL = streamingData["dashManifestUrl"] as? String {
+            print("YouTube DASH Manifest: \(dashManifestURL)")
         }
 
         var muxedStreams: [YouTubeStream] = []

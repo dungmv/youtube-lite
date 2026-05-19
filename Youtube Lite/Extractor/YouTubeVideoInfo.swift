@@ -38,4 +38,33 @@ public struct YouTubeVideoInfo {
         }
         return audioStreams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) })
     }
+
+    /// Stream audio ưu tiên tương thích với AVPlayer/iPhone trước khi ưu tiên bitrate
+    public var preferredAudioStream: YouTubeStream? {
+        let mp4Streams = audioStreams.filter {
+            let mime = $0.mimeType.lowercased()
+            return mime.contains("audio/mp4") || mime.contains("audio/m4a")
+        }
+
+        let candidates = !mp4Streams.isEmpty ? mp4Streams : audioStreams
+        guard !candidates.isEmpty else { return nil }
+
+        let preferredItags = [140, 139, 141]
+        for itag in preferredItags {
+            if let stream = candidates.first(where: { $0.itag == itag }) {
+                return stream
+            }
+        }
+
+        return candidates
+            .sorted {
+                let lhs = $0.bitrate ?? 0
+                let rhs = $1.bitrate ?? 0
+                if lhs == rhs {
+                    return ($0.audioSampleRate ?? "") > ($1.audioSampleRate ?? "")
+                }
+                return lhs > rhs
+            }
+            .first
+    }
 }
