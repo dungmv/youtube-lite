@@ -184,6 +184,13 @@ struct MacVideoServiceView: View {
                     NavigationLink(value: video.id) {
                         MacVideoRow(video: video)
                     }
+                    .contextMenu {
+                        Button(action: {
+                            copyVideoURL(videoID: video.id)
+                        }) {
+                            Label("Copy URL", systemImage: "doc.on.doc")
+                        }
+                    }
                 }
                 .listStyle(.sidebar)
                 .onChange(of: viewModel.selectedVideoID) { _, newID in
@@ -352,6 +359,13 @@ struct iOSVideoServiceView: View {
                                     iOSVideoCard(video: video)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu {
+                                    Button(action: {
+                                        copyVideoURL(videoID: video.id)
+                                    }) {
+                                        Label("Copy URL", systemImage: "doc.on.doc")
+                                    }
+                                }
                             }
                         }
                         .padding()
@@ -593,3 +607,15 @@ struct iOSVideoDetailView: View {
     }
 }
 #endif
+
+// MARK: - Clipboard Helpers
+func copyVideoURL(videoID: String) {
+    let urlString = "https://www.youtube.com/watch?v=\(videoID)"
+    #if os(macOS)
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(urlString, forType: .string)
+    #else
+    UIPasteboard.general.string = urlString
+    #endif
+}
