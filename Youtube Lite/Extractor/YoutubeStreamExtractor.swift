@@ -38,41 +38,101 @@ public final class YouTubeStreamExtractor {
 
     private static let playbackClients: [InnerTubeClient] = [
         InnerTubeClient(
-            name: "Android",
-            apiKey: innertubeAPIKey,
-            clientName: "ANDROID",
-            clientVersion: "20.10.38",
-            clientNameID: 3,
-            userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US; Pixel 8 Pro Build/UD1A.231105.004) gzip",
-            extraContext: [
-                "androidSdkVersion": 34,
-                "osName": "Android",
-                "osVersion": "14"
-            ],
-            allowsContentCheck: true
-        ),
-        InnerTubeClient(
             name: "Web",
             apiKey: nil,
             clientName: "WEB",
-            clientVersion: "2.20250326.00.00",
+            clientVersion: "2.20260206.01.00",
             clientNameID: 1,
             userAgent: webUserAgent,
             extraContext: [:],
             allowsContentCheck: false
         ),
         InnerTubeClient(
+            name: "Mobile Web",
+            apiKey: nil,
+            clientName: "MWEB",
+            clientVersion: "2.20260205.04.01",
+            clientNameID: 2,
+            userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
+            extraContext: [:],
+            allowsContentCheck: false
+        ),
+        InnerTubeClient(
+            name: "Web Embedded",
+            apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+            clientName: "WEB_EMBEDDED_PLAYER",
+            clientVersion: "1.20260206.01.00",
+            clientNameID: 56,
+            userAgent: webUserAgent,
+            extraContext: [:],
+            allowsContentCheck: false
+        ),
+        InnerTubeClient(
+            name: "Web Creator",
+            apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+            clientName: "WEB_CREATOR",
+            clientVersion: "1.20241203.01.00",
+            clientNameID: 62,
+            userAgent: webUserAgent,
+            extraContext: [:],
+            allowsContentCheck: false
+        ),
+        InnerTubeClient(
+            name: "Android VR",
+            apiKey: innertubeAPIKey,
+            clientName: "ANDROID_VR",
+            clientVersion: "1.65.10",
+            clientNameID: 28,
+            userAgent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+            extraContext: [
+                "androidSdkVersion": 32,
+                "deviceMake": "Oculus",
+                "deviceModel": "Quest 3",
+                "osName": "Android",
+                "osVersion": "12L"
+            ],
+            allowsContentCheck: true
+        ),
+        InnerTubeClient(
             name: "iOS",
             apiKey: "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc",
             clientName: "IOS",
-            clientVersion: "20.10.4",
+            clientVersion: "20.11.6",
             clientNameID: 5,
-            userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X)",
+            userAgent: "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)",
             extraContext: [
                 "deviceMake": "Apple",
-                "deviceModel": "iPhone16,2",
+                "deviceModel": "iPhone10,4",
                 "osName": "iOS",
-                "osVersion": "18.3.2"
+                "osVersion": "16.7.7.20H330"
+            ],
+            allowsContentCheck: true
+        ),
+        InnerTubeClient(
+            name: "Android",
+            apiKey: innertubeAPIKey,
+            clientName: "ANDROID",
+            clientVersion: "21.03.36",
+            clientNameID: 3,
+            userAgent: "com.google.android.youtube/21.03.36(Linux; U; Android 16; en_US; SM-S908E Build/TP1A.220624.014) gzip",
+            extraContext: [
+                "androidSdkVersion": 36,
+                "osName": "Android",
+                "osVersion": "16"
+            ],
+            allowsContentCheck: true
+        ),
+        InnerTubeClient(
+            name: "Android Music",
+            apiKey: innertubeAPIKey,
+            clientName: "ANDROID_MUSIC",
+            clientVersion: "5.34.51",
+            clientNameID: 21,
+            userAgent: "com.google.android.apps.youtube.music/5.34.51 (Linux; U; Android 13) gzip",
+            extraContext: [
+                "androidSdkVersion": 33,
+                "osName": "Android",
+                "osVersion": "13"
             ],
             allowsContentCheck: true
         )
@@ -510,7 +570,13 @@ public final class YouTubeStreamExtractor {
 
             do {
                 print("YouTube Player: Trying \(client.name) client for \(videoID)")
-                return try await fetchPlayerResponse(videoID: videoID, client: client, pageData: pageData)
+                let response = try await fetchPlayerResponse(videoID: videoID, client: client, pageData: pageData)
+                if let playbackError = playbackResponseError(response) {
+                    lastError = playbackError
+                    print("YouTube Player: \(client.name) client returned unusable playback response: \(playbackError.localizedDescription)")
+                    continue
+                }
+                return response
             } catch {
                 lastError = error
                 print("YouTube Player: \(client.name) client failed: \(error.localizedDescription)")
@@ -521,6 +587,24 @@ public final class YouTubeStreamExtractor {
         }
 
         throw lastError ?? YouTubeExtractorError.parseError("Không lấy được player response từ YouTube")
+    }
+
+    private func playbackResponseError(_ response: [String: Any]) -> Error? {
+        if let playabilityStatus = response["playabilityStatus"] as? [String: Any] {
+            let status = playabilityStatus["status"] as? String ?? ""
+            if status == "ERROR" || status == "LOGIN_REQUIRED" || status == "UNPLAYABLE" {
+                let reason = playabilityStatus["reason"] as? String
+                    ?? (playabilityStatus["messages"] as? [String])?.first
+                    ?? status
+                return YouTubeExtractorError.videoUnavailable(reason)
+            }
+        }
+
+        if response["streamingData"] as? [String: Any] == nil {
+            return YouTubeExtractorError.parseError("Không tìm thấy streamingData")
+        }
+
+        return nil
     }
 
     private func scrapeWatchPage(videoID: String) async throws -> WatchPageData {
@@ -640,9 +724,6 @@ public final class YouTubeStreamExtractor {
     }
 
     private func shouldTryNextPlaybackClient(after error: Error) -> Bool {
-        if case YouTubeExtractorError.videoUnavailable = error {
-            return false
-        }
         return true
     }
 

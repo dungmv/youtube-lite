@@ -25,6 +25,7 @@ public class VideoServiceViewModel: ObservableObject {
     public let authManager = YouTubeAuthManager.shared
     
     private var cancellables = Set<AnyCancellable>()
+    private var selectedVideoRequestID = 0
     
     public init() {
         // Automatically reload videos when login state changes (premium touch)
@@ -62,6 +63,10 @@ public class VideoServiceViewModel: ObservableObject {
     }
     
     public func selectVideo(_ video: YouTubeVideo) {
+        selectedVideoRequestID += 1
+        let requestID = selectedVideoRequestID
+        currentVideoInfo = nil
+        selectedStream = nil
         isLoading = true
         errorMessage = nil
         
@@ -69,10 +74,16 @@ public class VideoServiceViewModel: ObservableObject {
             do {
                 let extractor = YouTubeStreamExtractor(cookies: authManager.cookies)
                 let info = try await extractor.extract(videoIDOrURL: video.id)
+                guard requestID == self.selectedVideoRequestID, self.selectedVideoID == video.id else {
+                    return
+                }
                 self.currentVideoInfo = info
                 self.selectedStream = info.bestMuxedStream ?? info.bestVideoStream
                 self.isLoading = false
             } catch {
+                guard requestID == self.selectedVideoRequestID else {
+                    return
+                }
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
             }
@@ -494,8 +505,16 @@ class iOSVideoDetailViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published var videoInfo: YouTubeVideoInfo? = nil
     @Published var selectedStream: YouTubeStream? = nil
+    private var loadingVideoID: String?
     
     func loadVideo(id: String) {
+        if loadingVideoID == id, videoInfo?.videoId == id {
+            return
+        }
+
+        loadingVideoID = id
+        videoInfo = nil
+        selectedStream = nil
         isLoading = true
         errorMessage = nil
         
@@ -503,10 +522,16 @@ class iOSVideoDetailViewModel: ObservableObject {
             do {
                 let extractor = YouTubeStreamExtractor(cookies: YouTubeAuthManager.shared.cookies)
                 let info = try await extractor.extract(videoIDOrURL: id)
+                guard self.loadingVideoID == id else {
+                    return
+                }
                 self.videoInfo = info
                 self.selectedStream = info.bestMuxedStream ?? info.bestVideoStream
                 self.isLoading = false
             } catch {
+                guard self.loadingVideoID == id else {
+                    return
+                }
                 self.errorMessage = error.localizedDescription
                 self.isLoading = false
             }
@@ -555,6 +580,7 @@ struct iOSVideoDetailView: View {
                         set: { viewModel.selectedStream = $0 }
                     )
                 )
+                .id(videoInfo.videoId)
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -28,6 +28,7 @@ class VideoPlayerViewModel: ObservableObject {
     private var pendingSeekTime: Double?
     private var pendingResumeRate: Float?
     private var failedAudioStreamIDs = Set<String>()
+    private var loadGeneration = 0
     #if os(iOS)
     private var backgroundObserver: NSObjectProtocol?
     private var foregroundObserver: NSObjectProtocol?
@@ -50,6 +51,7 @@ class VideoPlayerViewModel: ObservableObject {
     }
     
     func onDisappear() {
+        loadGeneration += 1
         playerItemObserver?.invalidate()
         playerItemObserver = nil
         
@@ -179,17 +181,23 @@ class VideoPlayerViewModel: ObservableObject {
     #endif
     
     func loadVideo() {
+        loadGeneration += 1
+        let generation = loadGeneration
+        let stream = selectedStream
+        let videoID = videoInfo.videoId
         isLoading = true
         errorMessage = nil
         sourceAssets.removeAll()
         
         Task {
-            let stream = selectedStream
-            if !playbackManager.shouldReload(videoID: videoInfo.videoId, streamID: stream.id) {
+            guard generation == self.loadGeneration else { return }
+
+            if !playbackManager.shouldReload(videoID: videoID, streamID: stream.id) {
                 if let seekTime = self.pendingSeekTime, seekTime.isFinite, seekTime > 0 {
                     let target = CMTime(seconds: seekTime, preferredTimescale: 600)
                     await playbackManager.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
                 }
+                guard generation == self.loadGeneration else { return }
                 self.pendingSeekTime = nil
                 let shouldResume = (self.pendingResumeRate ?? 1.0) > 0
                 self.pendingResumeRate = nil
@@ -219,8 +227,9 @@ class VideoPlayerViewModel: ObservableObject {
                 playerItem = await createPlayerItem(videoURL: videoURL, audioURL: audioURL, visitorData: videoInfo.visitorData)
             }
 
+            guard generation == self.loadGeneration, stream.id == self.selectedStream.id else { return }
             playbackManager.player.replaceCurrentItem(with: playerItem)
-            self.observePlayerItem(playerItem)
+            self.observePlayerItem(playerItem, videoID: videoID, stream: stream, generation: generation)
             let seekTime = self.pendingSeekTime
             let shouldResume = (self.pendingResumeRate ?? 1.0) > 0
             self.pendingSeekTime = nil
@@ -321,31 +330,35 @@ class VideoPlayerViewModel: ObservableObject {
         }
     }
     
-    private func observePlayerItem(_ item: AVPlayerItem) {
+    private func observePlayerItem(_ item: AVPlayerItem, videoID: String, stream: YouTubeStream, generation: Int) {
         playerItemObserver?.invalidate()
         playerItemObserver = item.observe(\.status, options: [.new, .old]) { [weak self] item, change in
             guard let self = self else { return }
             Task { @MainActor in
+                guard generation == self.loadGeneration, item === self.playbackManager.player.currentItem else {
+                    return
+                }
+
                 if item.status == .readyToPlay {
-                    self.playbackManager.markLoaded(videoID: self.videoInfo.videoId, streamID: self.selectedStream.id)
-                    if !self.selectedStream.isAudioOnly {
+                    self.playbackManager.markLoaded(videoID: videoID, streamID: stream.id)
+                    if !stream.isAudioOnly {
                         self.failedAudioStreamIDs.removeAll()
                     }
                 } else if item.status == .failed {
                     print("⚠️ AVPlayerItem failed: \(String(describing: item.error?.localizedDescription))")
-                    self.handlePlaybackFailure(error: item.error)
+                    self.handlePlaybackFailure(error: item.error, failedStream: stream)
                 }
             }
         }
     }
     
-    private func handlePlaybackFailure(error: Error?) {
+    private func handlePlaybackFailure(error: Error?, failedStream: YouTubeStream) {
         playbackManager.resetLoaded()
 
-        if selectedStream.isAudioOnly {
-            failedAudioStreamIDs.insert(selectedStream.id)
+        if failedStream.isAudioOnly {
+            failedAudioStreamIDs.insert(failedStream.id)
             if let fallbackStream = nextDirectAudioFallback(excluding: failedAudioStreamIDs) {
-                print("🔁 Audio stream itag \(selectedStream.itag) failed; retrying direct audio stream itag \(fallbackStream.itag)")
+                print("🔁 Audio stream itag \(failedStream.itag) failed; retrying direct audio stream itag \(fallbackStream.itag)")
                 let currentTime = playbackManager.player.currentTime().seconds
                 pendingSeekTime = currentTime.isFinite && currentTime > 0 ? currentTime : pendingSeekTime
                 pendingResumeRate = 1.0
@@ -355,15 +368,15 @@ class VideoPlayerViewModel: ObservableObject {
         }
 
         let streamKind: String
-        if selectedStream.isAudioOnly {
+        if failedStream.isAudioOnly {
             streamKind = "audio"
-        } else if selectedStream.isVideoOnly {
+        } else if failedStream.isVideoOnly {
             streamKind = "video adaptive"
         } else {
             streamKind = "muxed"
         }
 
-        self.errorMessage = "Không thể phát stream \(streamKind) itag \(selectedStream.itag): \(error?.localizedDescription ?? "Lỗi kết nối từ YouTube CDN")"
+        self.errorMessage = "Không thể phát stream \(streamKind) itag \(failedStream.itag): \(error?.localizedDescription ?? "Lỗi kết nối từ YouTube CDN")"
     }
 
     private func nextDirectAudioFallback(excluding failedIDs: Set<String>) -> YouTubeStream? {
@@ -374,7 +387,7 @@ class VideoPlayerViewModel: ObservableObject {
         let candidates = (!mp4Streams.isEmpty ? mp4Streams : videoInfo.audioStreams)
             .filter { !failedIDs.contains($0.id) }
 
-        let preferredItags = [140, 139, 141]
+        let preferredItags = [139, 140, 141, 599]
         for itag in preferredItags {
             if let stream = candidates.first(where: { $0.itag == itag }) {
                 return stream

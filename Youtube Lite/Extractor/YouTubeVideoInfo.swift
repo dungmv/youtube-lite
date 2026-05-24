@@ -49,7 +49,7 @@ public struct YouTubeVideoInfo {
         let candidates = !mp4Streams.isEmpty ? mp4Streams : audioStreams
         guard !candidates.isEmpty else { return nil }
 
-        let preferredItags = [140, 139, 141]
+        let preferredItags = [139, 140, 141, 599]
         for itag in preferredItags {
             if let stream = candidates.first(where: { $0.itag == itag }) {
                 return stream
