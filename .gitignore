@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -63,3 +63,7 @@ playground.xcworkspace
 
 # Swift Package Manager
 # Package.resolved
+
+.deriveddata-macos
+.deriveddata
+.codex-tmp
